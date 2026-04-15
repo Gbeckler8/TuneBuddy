@@ -1,23 +1,29 @@
 import numpy as np
 from app_logic.Alignment import Alignment, Mistake
 from app_logic.NoteData import NoteData, Note
-from algorithms.Config import Config
+from app_logic.user.ds import Recording
 
 class StringEditor:
-    def __init__(self, config: Config):
+    def __init__(self, recording: Recording):
+        self.recording = recording
+        self.config = recording.config
+
         # string edit costs
-        self.INSERTION_COST = config.ins_cost
-        self.DELETION_COST = config.del_cost
-        self.SUBSTITUTION_COST = config.sub_cost
-        self.TOLERANCE = config.tolerance                                              
+        self.INSERTION_COST = self.config.ins_cost
+        self.DELETION_COST = self.config.del_cost
+        self.SUBSTITUTION_COST = self.config.sub_cost
+        self.TOLERANCE = self.config.tolerance                                              
 
         # tiger-mom parameter
-        self.TIGER_LEVEL = config.tiger_level
+        self.TIGER_LEVEL = self.config.tiger_level
 
     def string_edit(self, user_string: NoteData, midi_string: NoteData):
         """run string editing on the two user and midi strings.
         returns the alignment object as the result of string editing
         """
+        user_string = self.recording.NoteData
+        midi_string = self.recording.score_data.note_data
+
         # print("Starting string editing...")
         user_notes = list(user_string.data.values())
         user_notes = [n for n in user_notes if n.midi_num[0] != -1]

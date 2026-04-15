@@ -1,63 +1,39 @@
 from pathlib import Path
-from io import BytesIO
 import mido
-from music21 import converter
 
 from app_logic.NoteData import NoteData, Note
 
 class MidiData:
-    """
-    Load and store score data from MIDI or MusicXML files.
-    Stores mido.Message objects which can be handled by MidiSynth,
-    organized by elapsed time. Also track channels used and BPM.
-    """
-    def __init__(self, filepath: str):
-        self.filepath = filepath
-        self.length = 0 # length of the piece in seconds
+    def __init__(self, filepath: str | Path):
+        self.filepath = Path(filepath)
 
         # --- THE ESSENTIAL STUFF ---
         # store data by {elapsed_time: Message}
         self.messages: dict[float, list[mido.Message]] = {}
         self.programs: dict[float, list[mido.Message]] = {} # stores "turn on instrument" messages
         self.metas: dict[float, list[mido.MetaMessage]] = {}
-        self.note_data_full: NoteData = NoteData()  
-        self.note_data: NoteData = self.note_data_full
-        
-        # list of all channels used in this score
-        self.channels: set[int] = set()
-        self.bpm: int = 100 # default tempo
 
-        self.load(filepath)
-        self.make_note_data()
-        self.channels = self.init_channels()
+        # metadata
+        # self.length = 0 # length of the piece in seconds
+        # self.bpm: int = 120 # default bullshit tempo (set to musescore default)
+        self.instruments: dict[int, int] = {} # {channel: program_number}
 
-    def load(self, filepath: str):
-        """Load a score file, either MIDI or MusicXML."""
-        ext = Path(filepath).suffix.lower()
-        print(f"Loading score file: {filepath} (ext: {ext})")
-        
-        if ext in {'.mid', '.midi'}:
-            midi_data = mido.MidiFile(filepath)
-            self.handle_midi(midi_data)
-        elif ext in {'.xml', '.musicxml'}:
-            self.handle_musicxml(filepath)
+        self.parse_messages(mido.MidiFile(self.filepath))
 
-        else:
-            raise ValueError(f"Cannot handle file type: {filepath}")
-
-    def handle_midi(self, midi_data: mido.MidiFile):
+    def parse_messages(self, midi_data: mido.MidiFile):
         """Load a MIDI file using mido, parse messages by elapsed time.
         Iterate through all messages, categorize by 
             - meta
             - program change
-            - normal messages
+            - all messages
         then store as dict[elapsed_time, list[Message]].
-        Also track all channels used. And find the BPM if possible.
+        Also track all instruments (and what channels they play on). 
+        And find the BPM if possible.
         """
         print("Handling MIDI file...")
 
         metas, messages, programs = {}, {}, {}
-        channels = set()
+        instruments = {}
 
         elapsed_time = 0
         for msg in midi_data:
@@ -75,11 +51,11 @@ class MidiData:
             # track program changes
             if msg.type == "program_change":
                 programs.setdefault(elapsed_time, []).append(msg)
-                channels.add(msg.channel)
+                instruments[msg.channel] = msg.program
 
-        # ---> error handling: if no channels used, add a fake one
-        if not channels:
-            channels.add(0)
+        # ---> error handling: if no channels used, add a fake one (violin lmao)
+        if not instruments:
+            instruments[0] = 40
             fake_msg = mido.Message('program_change', program=40, channel=0, time=0)
             programs[0] = [fake_msg]
 
@@ -87,36 +63,19 @@ class MidiData:
         self.messages = messages
         self.programs = programs
         self.metas = metas
-        self.channels = channels
+        self.instruments = instruments
         self.length = elapsed_time # total length of the piece in seconds
-
-    def handle_musicxml(self, filepath: str):
-        """
-        Basically converts MusicXML to MIDI using music21, then handles as MIDI.
-        Has a slightly nicer BPM handling than with MIDI files.
-        """
-        print("Handling MusicXML file...")
-        self.score = converter.parse(filepath)
-
-        midi_path = Path(self.score.write('midi'))
-        midi_data = mido.MidiFile(str(midi_path))
-        self.handle_midi(midi_data)
-
-        # BPM handling
-        for el in self.score.recurse().getElementsByClass('MetronomeMark'):
-            self.bpm = round(el.number)
-            break
-
-    def get_length(self) -> float:
-        """Return the length of the piece in seconds. Gets based on clipped note data."""
-        return self.note_data.get_length()
-
-    def make_note_data(self):
+    
+    def make_notedatas(self) -> dict[int, NoteData]:
         """Convert the stored messages into Note objects in NoteData.
         Should be called after loading a MIDI or MusicXML file.
+
+        Returns:
+            NoteData for the MIDI file
         """
+        note_lists = {channel: dict() for channel in self.instruments.keys()}
         note_onsets = {}
-        notes = {}
+        # notes = {}
 
         i = 0
         for elapsed_time, msgs in self.messages.items():
@@ -140,28 +99,71 @@ class MidiData:
                         i=i,
                         start_time=start_time,
                         end_time=elapsed_time,
-                        midi_num=[msg.note]
+                        midi_num=[msg.note],
+                        velocity=msg.velocity,
+                        instrument=self.instruments.get(msg.channel, None)
                     )
-                    notes[start_time] = note
+                    # notes[start_time] = note
+                    note_lists[msg.channel][start_time] = note
 
                     # cleanup our iteration variables
                     del note_onsets[key]
                     i += 1
 
-        self.note_data_full.data = notes
-        self.note_data_full.times = sorted(list(notes.keys()))
+        note_datas = {}
+        for channel, notes in note_lists.items():
+            note_datas[channel] = NoteData()
+            note_datas[channel].load_data(notes=notes)        
+        return note_datas
 
-    def resize(self, new_length: float):
-        """Resize the piece to new_length in seconds.
-        Stretches or compresses all message timings.
+    def init_metronome(self, beat_times: list[tuple[float, bool]]):
+        """Initialize the metronome by adding meta messages at the specified beat times.
+        This allows us to visualize the beats in the piano roll and guitar hero view.
         """
-        if new_length == self.length:
-            return  # no change
+        WOODBLOCK_PROGRAM = 115
+        CLICK_DURATION = 0.1
 
-        # calculate the stretching/compressing factor
-        factor = new_length / self.length
+        DOWNBEAT_NOTE = 80
+        BEAT_NOTE = 40
+        # add metronome on a new channel after all instruments
+        channel = len(self.instruments.keys()) 
+        pc = mido.Message(
+            'program_change', 
+            program=WOODBLOCK_PROGRAM, 
+            channel=channel, 
+            time=0
+        )
+        self.programs.setdefault(0.0, []).append(pc)
+        self.instruments[channel] = WOODBLOCK_PROGRAM
 
-        # update all message timings
+        for beat_time, is_downbeat in beat_times:            
+            t_on = round(float(beat_time), 9)
+            t_off = round(float(beat_time) + CLICK_DURATION, 9)
+            note_num = DOWNBEAT_NOTE if is_downbeat else BEAT_NOTE   
+
+            on = mido.Message(
+                'note_on',
+                channel=channel,
+                note=note_num,
+                velocity=100,
+                time=t_on
+            )
+            off = mido.Message(
+                'note_off',
+                channel=channel,
+                note=note_num,
+                velocity=0,
+                time=t_off
+            )
+            self.messages.setdefault(t_on, []).append(on)
+            self.messages.setdefault(t_off, []).append(off)
+
+        self.messages = dict(sorted(self.messages.items())) # resort messages
+        self.instruments[channel] = WOODBLOCK_PROGRAM # add to instruments list
+
+
+    def change_tempo(self, factor: float):
+         # update all message timings
         messages = {}
         for t, msgs in self.messages.items():
             new_time = t * factor
@@ -179,43 +181,4 @@ class MidiData:
             new_time = t * factor
             programs[new_time] = msgs
         self.programs = programs
-
-        self.make_note_data() # regenerate note data
         
-        # update the length + BPM
-        new_bpm = self.bpm / factor
-        self.bpm = round(new_bpm)
-        self.length = new_length
-
-    def change_tempo(self, new_bpm: int):
-        """Change the tempo of the piece to new_bpm."""
-
-        if new_bpm <= 0:
-            print("Invalid BPM, must be > 0")
-            return
-        
-        factor = self.bpm / new_bpm
-        new_length = self.length * factor
-        self.resize(new_length)
-        self.bpm = new_bpm
-
-    def get_tempo(self) -> int:
-        """Return the BPM of the piece."""
-        return self.bpm
-    
-    def get_programs(self) -> dict[int, int]:
-        """Return all programs used in the piece as {channel: program}."""
-        channel_programs = {}
-        for msgs in self.programs.values():
-            for msg in msgs:
-                channel_programs[msg.channel] = msg.program
-        return channel_programs
-    
-    def init_channels(self) -> set[int]:
-        """Initialize and return the set of channels used in this piece."""
-        channels = set()
-        for msgs in self.messages.values():
-            for msg in msgs:
-                if hasattr(msg, "channel"):
-                    channels.add(msg.channel)
-        return channels

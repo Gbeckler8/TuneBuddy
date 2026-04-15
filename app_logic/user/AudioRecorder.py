@@ -4,17 +4,17 @@ from PyQt6.QtCore import pyqtSignal
 import threading
 
 from app_logic.user.ds.PitchData import Pitch
-from app_logic.user.ds.UserData import UserData
+from app_logic.user.ds.Recording import Recording
 
 class AudioRecorder:
-    def __init__(self, user_data: UserData, sr: int=44100):
+    def __init__(self, recording: Recording):
         # time variables
         self.t_0: float = 0
         self.t_curr: float = 0
 
         # important reference: to its parent user_data
-        self.user_data = user_data
-        self.sr = user_data.audio_data.sr
+        self.recording = recording
+        self.sr = recording.audio_data.sr if recording else 44100 # default sr
 
         # threading variables
         self.recording_thread = None
@@ -28,14 +28,21 @@ class AudioRecorder:
             blocksize=0 # dynamic block size for best performance
         )
 
+    def load_recording(self, recording: Recording):
+        """Load a new Recording object to record into."""
+        self.recording = recording
+        self.sr = recording.audio_data.sr
+        self.t_0 = 0
+        self.t_curr = 0
+
     def run(self, start_time: float=0):
         """start recording from the given start_time (sec)"""
         self.stop()  # only have one thread at a time
         self.stop_event.clear()
 
         # keep track of the current start time
-        self.t_0, self.t_cur = start_time, start_time
-        self.user_data.a2p_queue.init_start_time(start_time)
+        self.t_0, self.t_curr = start_time, start_time
+        self.recording.a2p_queue.init_start_time(start_time)
 
         # start the input stream
         self.recording_thread = threading.Thread(target=self._run, args=( ), daemon=True)
@@ -55,7 +62,7 @@ class AudioRecorder:
     def _callback(self, indata, frames, time, status):
         """
         Is called every time a new audio block has been recorded and read into indata.
-        This is where we write the audio data to our user_data.audio_data.
+        This is where we write the audio data to our recording.audio_data.
 
         Args:
             indata: the audio data block that has been recorded
@@ -66,7 +73,7 @@ class AudioRecorder:
         if status:
             print(status, flush=True)
         
-        # print(f"recording audio @ {self.t_cur}")
+        # print(f"recording audio @ {self.t_curr}")
         indata = indata.flatten()
-        self.user_data.write_data(indata, start_time=self.t_cur)
-        self.t_cur += len(indata) / self.sr # increment the current time
+        self.recording.write_data(indata, start_time=self.t_curr)
+        self.t_curr += len(indata) / self.sr # increment the current time

@@ -1,20 +1,20 @@
 import threading
 import time
 from typing import Union
-import logging
+# import logging
 from PyQt6.QtCore import QObject
 
-from app_logic.midi.MidiData import MidiData
+from app_logic.midi.ScoreData import ScoreData
 from app_logic.midi.MidiSynth import MidiSynth
-from ui import WallClock
+from ui.time import WallClock
 
 class MidiPlayer(QObject):
-    """object to play a midi_data"""
+    """object to play a score object using a midi synthesizer"""
 
     def __init__(self, midi_synth: MidiSynth, wall_clock: WallClock):
         super().__init__()
         self.midi_synth = midi_synth
-        self.midi_data: MidiData = None
+        self.score_data: ScoreData = None
         self.wall_clock = wall_clock
 
         # threading variables
@@ -25,38 +25,19 @@ class MidiPlayer(QObject):
         self.current_time = 0
         self.playback_speed = 1.0
 
-        # channel stuff
-        self.all_channels = []
-        self.active_channels = []
-
-    def load_midi(self, midi: Union[str, MidiData]):
+    def load_score(self, score: Union[str, ScoreData]):
         """
-        Load a MIDI file from a file path (str) or a MidiData object 
-        and sets the internal midi_data + all_channels/active_channels
+        Load a score from a file path (str) or a ScoreData object
         
         Args:
-            midi: Union[str, MidiData], path to MIDI file or MidiData object
+            score: Union[str, ScoreData], path to score file or ScoreData object
         """
-        if isinstance(midi, str):
-            self.midi_data = MidiData(midi)
-        elif isinstance(midi, MidiData):
-            self.midi_data = midi
+        if isinstance(score, str):
+            self.score_data = ScoreData(score)
+        elif isinstance(score, ScoreData):
+            self.score_data = score
         else:
-            raise ValueError("midi source must be either a file path (str) or a MidiData object")
-
-        # set all/current channels
-        self.all_channels = self.midi_data.channels
-        self.active_channels = self.all_channels
-
-    def set_channels(self, channels: list):
-        """
-        Set the channels to play from the MIDI file.
-        Args:
-            channels: list, channels to play
-        """
-        # you wouldn't think we'd need this but just in case lmao
-        valid_channels = [c for c in channels if c in self.all_channels]
-        self.active_channels = valid_channels
+            raise ValueError("score source must be either a file path (str) or a ScoreData object")
 
     def play(self, start_time: float=0):
         """play a MIDI file using the synthesizer from a particular time
@@ -65,9 +46,9 @@ class MidiPlayer(QObject):
         Args:
             start_time: time (sec) to start playing from
         """
-        # exit if no midi data loaded
-        if self.midi_data is None:
-            print("Ignoring MIDI playback, no MIDI data loaded.")
+        # exit if no score data loaded
+        if self.score_data is None:
+            print("Ignoring MIDI playback, no score data loaded.")
             return
         
         # if playback thread already exists
@@ -82,20 +63,22 @@ class MidiPlayer(QObject):
         # PLAY from new start_time
         # clear stop event (eg, no longer triggers event during playback)
         self.thread_stop_event.clear()
-        self.wall_clock.start(t=start_time)
+        # self.wall_clock.start(t=start_time)
         self.playback_thread = threading.Thread(target=self._play, args=(start_time,))
         self.playback_thread.start()
 
     def _play(self, start_time: float=0):
         """
         internal function called by self.playback_thread to handle playback from any
-        time in the MIDI file
+        time in the score. uses binary search for faster indexing based on start time
         """
         # even if start_time =/= 0, ensure all programs are initialized
-        for _, program_change_messages in self.midi_data.programs.items():
-            self.midi_synth.handle_midi(program_change_messages[0])
+        midi_data = self.score_data.midi_data
+        for _, program_change_messages in midi_data.programs.items():
+            for msg in program_change_messages:
+                self.midi_synth.handle_midi(msg)
         
-        msg_times = list(self.midi_data.messages.keys())
+        msg_times = list(midi_data.messages.keys())
         # find index to start from based on start_time
         _, start_idx = MidiPlayer.binary_search(msg_times, start_time)
 
@@ -108,11 +91,11 @@ class MidiPlayer(QObject):
 
             # iterate through the messages and play them
             current_time = msg_times[i]
-            messages = self.midi_data.messages[current_time]
+            messages = midi_data.messages[current_time]
 
             for msg in messages:
                 # only handle messages in active_channels
-                if hasattr(msg, "channel") and msg.channel in self.active_channels:
+                if hasattr(msg, "channel") and msg.channel in self.score_data.playing_instruments:
                     self.midi_synth.handle_midi(msg)
                 elif msg.is_meta:
                     self.midi_synth.handle_midi(msg)
@@ -128,10 +111,10 @@ class MidiPlayer(QObject):
                 # time.sleep(sleep_time)
                 
             elif i == len(msg_times)-1:
-                self.pause()
+                self.stop()
 
-    def pause(self):
-        """pause playback, setting thread_stop_event"""
+    def stop(self):
+        """stop playback, setting thread_stop_event"""
         if self.playback_thread is not None and self.playback_thread.is_alive():
             self.thread_stop_event.set()
             # Wait for thread to finish (will soon, since stop_event is set)

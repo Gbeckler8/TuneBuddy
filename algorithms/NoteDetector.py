@@ -4,33 +4,31 @@ from app_logic.user.ds.PitchData import Pitch
 from PyQt6.QtCore import pyqtSignal, QObject
 import threading
 
-from app_logic.user.ds.UserData import UserData
+from app_logic.user.ds.Recording import Recording
 from app_logic.user.ds.PitchData import PitchData
 from algorithms.Config import Config
 
 class NoteDetector(QObject):
     note_detected = pyqtSignal(float)
     
-    def __init__(self, config: Config, parent: QObject|None=None):
+    def __init__(self, recording: Recording, parent: QObject|None=None):
         """initialize the note detection algorithm parameters"""
         super().__init__(parent)
 
         # algorithm params
-        self.config = config
-        self.w = config.w2
-        self.hop = config.h2
-        self.PITCH_THRESH = config.pitch_thresh
-        self.SLOPE_THRESH = config.slope_thresh
+        self.recording = recording
+        self.config = recording.config
+        self.w = self.config.w2
+        self.hop = self.config.h2
+        self.PITCH_THRESH = self.config.pitch_thresh
+        self.SLOPE_THRESH = self.config.slope_thresh
         
-        self.UNVOICED_PROP = config.unv_ratio # if more than 50% of pitches are unvoiced
-        self.UNV_THRESH = config.unv_thresh # unvoiced pitches have unv_prob > sens
+        self.UNVOICED_PROP = self.config.unv_ratio # if more than 50% of pitches are unvoiced
+        self.UNV_THRESH = self.config.unv_thresh # unvoiced pitches have unv_prob > sens
         
         # threading variables
         self.nda_thread: threading.Thread = None
         self.stop_event = threading.Event()
-
-    def init_user_data(self, user_data: UserData):
-        self.user_data = user_data
 
     def stop(self):
         if self.nda_thread and self.nda_thread.is_alive():
@@ -170,7 +168,7 @@ class NoteDetector(QObject):
     def run(self, start_time: float=None):
         self.stop()
         self.stop_event.clear()
-        self.user_data.p2n_queue.init_start_time(start_time)
+        self.recording.p2n_queue.init_start_time(start_time)
         self.nda_thread = threading.Thread(
             target=self._run, daemon=True
         )
@@ -193,7 +191,7 @@ class NoteDetector(QObject):
         i = 0
         while not self.stop_event.is_set():
             try:
-                x, t = self.user_data.p2n_queue.pop(self.w, self.hop)
+                x, t = self.recording.p2n_queue.pop(self.w, self.hop)
                 if x is None or t < 0: # if invalid data read, skip frame
                     continue
 
@@ -226,7 +224,7 @@ class NoteDetector(QObject):
                     end_time=t,
                     midi_num=prev_note
                 )
-                self.user_data.note_data.write_note(n)
+                self.recording.note_data.write_note(n)
                 i += 1
 
                 # update iteration variables

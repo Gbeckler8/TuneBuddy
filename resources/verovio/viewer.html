@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+
+    <link rel="stylesheet" href="./viewer.css" />
+
+    <script>
+      // must be defined before loading verovio-toolkit-wasm.js
+      var Module = {
+        locateFile: function(path, prefix) {
+          // viewer.html lives in: resources/verovio/
+          // wasm lives in:        resources/verovio/imports
+          return "./imports/" + path;
+        }
+      };
+    </script>
+    <!-- local verovio WASM loader -->
+    <script src="./imports/verovio-toolkit-wasm.js"></script>
+
+    <!-- app code -->
+    <script src="./viewer2.js"></script>
+  </head>
+
+  <body>
+    <div id="wrap"><div id="notation"></div></div>
+    <div id="status">Loading Verovio…</div>
+  </body>
+</html>

@@ -21,7 +21,7 @@ class Buffer:
         with self.lock:
             self.buffer.extend(indata)
 
-    def pop(self, frame_size: int=4096, hop_size: int=128):
+    def pop(self, frame_size: int=4096, hop_size: int=128, stall: bool=False):
         """reads frame_size samples from the audio queue then pops it off
         also returns the start time of the samples in terms of audio_data
         then increments t_curr to reflect
@@ -44,6 +44,13 @@ class Buffer:
 
         # update time variables
         read_time = self.t_curr
-        self.t_curr += hop_size / self.sr
+        if not stall:
+            self.t_curr += hop_size / self.sr
 
         return outdata, read_time
+
+    # def stall(self, hop_size: int=128):
+    #     """stall the buffer by resetting the current time to the start time
+    #     and clearing the buffer"""
+    #     with self.lock:
+    #         self.t_curr -= hop_size / self.sr

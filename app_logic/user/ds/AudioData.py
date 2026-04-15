@@ -2,28 +2,20 @@ import numpy as np
 import threading
 import soundfile as sf
 
-from app_logic.midi.MidiData import MidiData
 from algorithms.Config import Config
 
 class AudioData:
-    def __init__(self, midi_data: MidiData=None, audio_filepath: str=None, config: Config=None):
+    def __init__(self, length: float=60, audio_filepath: str=None, config: Config=None):
         """
-        initialize user's audio data with an array of zeros of length equal to the MIDI file length
-        if no midi_data supplied, default to 60 seconds worth of audio
+        initialize user's audio data with an array of zeros of length equal to 
+        the supplied length (sec).
         """
-        self.midi_data = midi_data
         self.sr = config.sr if config is not None else 44100
 
         # initialize the audio data array with all zeros, with capacity 
-        # based on MIDI file length and app's SAMPLE_RATE
-        if self.midi_data is not None:
-            self.capacity = int(self.midi_data.get_length() * self.sr)
-            self.data = np.zeros(self.capacity, dtype=np.float32)
-        
-        else: # if no MIDI file is provided, use a default length of 60 seconds
-            DEFAULT_LENGTH = 60
-            self.capacity = int(DEFAULT_LENGTH * self.sr)
-            self.data = np.zeros(self.capacity, dtype=np.float32)
+        # based on the supplied length (sec)
+        self.capacity = int(length * self.sr)
+        self.data = np.zeros(self.capacity, dtype=np.float32)
             
         if audio_filepath is not None:
             self.load_data(audio_filepath) # (also sets capacity + sr)

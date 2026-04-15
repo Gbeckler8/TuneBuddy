@@ -38,7 +38,8 @@ class AudioPlayer:
             start_time: time (sec) to start playing from
         """
         if self.audio_data is None:
-            logging.error("no audio data loaded. exiting")
+            print("ignoring audio playback, no audio data loaded.")
+            # logging.error("no audio data loaded. exiting")
             return
 
         # if playback thread already exists
@@ -63,7 +64,9 @@ class AudioPlayer:
         sd.play(audio_array, self.audio_data.sr)
         sd.wait()
 
-    def pause(self):
+    def stop(self):
+        if not self.audio_data:
+            return
         sd.stop()
         if self.playback_thread is not None and self.playback_thread.is_alive():
             self.playback_thread.join()

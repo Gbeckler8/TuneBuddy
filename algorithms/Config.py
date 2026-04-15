@@ -10,7 +10,7 @@ class Config:
     fmin: float = 196.0
     fmax: float = 5000.0
     tuning: float = 440.0
-    unv_thresh: float = 0.3 # if unvoiced_prob > unv_thresh, consider the frame unvoiced
+    unv_thresh: float = 0.05 # if unvoiced_prob > unv_thresh, consider the frame unvoiced
 
     # --- NOTE DETECTION PARAMETERS ---
     w2: int = 30 # frame size

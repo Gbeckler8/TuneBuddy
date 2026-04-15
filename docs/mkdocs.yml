@@ -1,0 +1,15 @@
+site_name: TuneBuddy Wiki
+docs_dir: wiki
+theme:
+  name: material
+plugins:
+  - search
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - User Guide:
+      - Getting Started: user_guide/getting_started.md
+      - Features: user_guide/features.md
+  - Developer Guide:
+      - Architecture: developer_guide/architecture.md
+      - Contributing: developer_guide/contributing.md

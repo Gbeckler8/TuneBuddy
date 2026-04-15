@@ -32,7 +32,8 @@ class PitchConfig:
         self.fmax = config.get("fmax", self.fmax)
 
 class Pitch:
-    def __init__(self, time: float, candidates: list[tuple[float, float]], volume: float, unvoiced_prob: float, config: Config):
+    def __init__(self, time: float, candidates: list[tuple[float, float]], 
+                 volume: float, unvoiced_prob: float, distance: float, config: Config):
         """
         The quintessential pitch object for the app.
         ---
@@ -46,6 +47,8 @@ class Pitch:
         self.candidates = candidates # [(midi_num, prob), ...]; sorted
         self.volume = volume # mean |amplitude| of the frame
         self.unvoiced_prob = unvoiced_prob # how messy the signal was (no clean periodicity)
+
+        self.distance = distance # distance to target note
 
 class PitchData:
     def __init__(self, config: Config):

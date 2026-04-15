@@ -6,27 +6,28 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from tqdm import tqdm
 
 from app_logic.user.ds.PitchData import Pitch
-from app_logic.user.ds.UserData import UserData
+from app_logic.user.ds.Recording import Recording
 from algorithms.Config import Config
 
 class PitchDetector(QObject):
     
-    pitch_detected = pyqtSignal()
+    pitch_detected = pyqtSignal(float)
     
-    def __init__(self, config: Config, parent: QObject|None=None):
+    def __init__(self, recording: Recording, parent: QObject|None=None):
         """
         Initialize the pitch detection parameters, like the tuning, frequency range, etc.
         Best to make it as specific as possible to your desired use case to improve accuracy of the detection.
         """
         super().__init__(parent)
-        self.config = config
-        self.SR = config.sr # for sample-to-frequency conversion
+        self.recording = recording
+        self.config = self.recording.config
+        self.SR = self.config.sr # for sample-to-frequency conversion
 
         # --- pitch config variables ---
         # ensure max lag is big enough to detect lowest f0 (largest period)
         # defaults to violin min
-        self.tau_max = int(config.sr / config.fmin) 
-        self.tau_min = int(config.sr / config.fmax)
+        self.tau_max = int(self.config.sr / self.config.fmin) 
+        self.tau_min = int(self.config.sr / self.config.fmax)
 
         # initialize beta distribution parameters
         self.UNVOICED_PROB = 0.01
@@ -34,16 +35,17 @@ class PitchDetector(QObject):
         self.beta_pdf, self.thresholds = self.threshold_prior(n_thresholds=self.N_THRESHOLDS)
 
         # rolling window variables (for detect_pitches)
-        self.FRAME_SIZE = config.w1
-        self.HOP_SIZE = config.h1
+        self.FRAME_SIZE = self.config.w1
+        self.HOP_SIZE = self.config.h1
 
         # threading variables
         self.pda_thread: threading.Thread = None
         self.stop_event = threading.Event()
 
-    def init_user_data(self, user_data: UserData):
-        self.user_data = user_data
+        # block variable for stalling buffer
+        self.block = False
 
+    # might not be necessary anymore :)
     def load_config(self, config: Config):
         """re-initialize the tuning parameters"""
         self.config = config
@@ -59,7 +61,7 @@ class PitchDetector(QObject):
         """keep trying to detect pitches while we can"""
         self.stop()
         self.stop_event.clear()
-        self.user_data.a2p_queue.init_start_time(start_time)
+        self.recording.a2p_queue.init_start_time(start_time)
         self.pda_thread = threading.Thread(
             target=self._run, daemon=True
         )
@@ -68,16 +70,18 @@ class PitchDetector(QObject):
     def _run(self) -> None:
         while not self.stop_event.is_set():
             try:
-                x, t = self.user_data.a2p_queue.pop(self.FRAME_SIZE, self.HOP_SIZE)
+                # if self.block:
+                    # self.recording.a2p_queue.stall(self.HOP_SIZE) # occurs when in practice mode and you fuck up
+                x, t = self.recording.a2p_queue.pop(self.FRAME_SIZE, self.HOP_SIZE, stall=self.block)
 
                 if x is None: # returns none if not enough to detect
                     self.stop_event.wait(0.002)
                     continue
                 # x, t = x[0], x[1]
                 pitch = self.detect_pitch(x, t)
-                self.user_data.write_pitch_data([pitch], t)
-                print(f'detected pitch @ {pitch.time}, midi_num: {pitch.candidates[0][0]}, unvoiced_prob: {pitch.unvoiced_prob}')
-                self.pitch_detected.emit()
+                self.recording.write_pitch_data([pitch], t)
+                # print(f'detected pitch @ {pitch.time}, midi_num: {pitch.candidates[0][0]}, unvoiced_prob: {pitch.unvoiced_prob}')
+                self.pitch_detected.emit(pitch.time)
 
             except Exception as e:
                 print(f"[PitchDetector] frame skipped due to error: {e}")
@@ -121,8 +125,11 @@ class PitchDetector(QObject):
         # create + return the final pitch object
         candidates = list(zip(midi_estimates, pitch_probs))
         candidates.sort(key=lambda c: c[1], reverse=True) # sort from most to least probable
+        distance = self.recording.score_data.current_note().midi_num[0] - candidates[0][0]
+        print(f"detected pitch @ {start_time:.2f} sec, midi_num: {candidates[0][0]:.2f}, unvoiced_prob: {unvoiced_prob:.2f}, distance to target: {distance:.2f}")
         pitch = Pitch(time=start_time, candidates=candidates, 
-                      volume=volume, unvoiced_prob=unvoiced_prob, config=self.config)
+                      volume=volume, unvoiced_prob=unvoiced_prob, 
+                      distance=distance, config=self.config)
         return pitch
 
 

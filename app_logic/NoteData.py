@@ -2,11 +2,14 @@ import numpy as np
 from collections import defaultdict
 from bisect import bisect_left, bisect_right
 class Note:
-    def __init__(self, i: int, start_time: float, end_time: float, midi_num: list[float]):
+    def __init__(self, i: int, start_time: float, end_time: float, midi_num: list[float], 
+                 velocity: int=None, instrument: int=None):
         self.id = i # used to keep track of note within the piece
         self.start_time = start_time
         self.end_time = end_time
         self.midi_num = midi_num
+        self.velocity = velocity # might change to a list of peaks later?
+        self.instrument = instrument
 
 class NoteData:
     """Data to store and retrieve notes efficiently (indexing + binary search)
@@ -14,6 +17,11 @@ class NoteData:
     def __init__(self):
         self.data: dict[float, Note] = defaultdict(Note)
         self.times: list[float] = [] # times are stored for binary search 
+
+    def load_data(self, notes: dict[float, Note], times: list[float]=None, bounds: tuple=None):
+        """load in note data from a dict of notes, optional times list and bounds"""
+        self.data = notes
+        self.times = times if times is not None else sorted(list(notes.keys())) 
 
     def write_note(self, note: Note):
         """writes a single note to the note data @ the corresponding start_time"""
@@ -24,13 +32,21 @@ class NoteData:
         
         self.data[note.start_time] = note
 
-    def get_length(self) -> float:
-        """return the length of the note data in seconds"""
+    def get_length(self, bounds: tuple[float, float]=None) -> float:
+        """Return the length of the note data in seconds.
+        If no bounds are supplied, returns the end_time of the last note; else
+        return the length of the notes within the bounds"""
         if not self.times:
             return 0.0
-        last_time = self.times[-1]
-        last_note = self.data[last_time]
-        return last_note.end_time
+        
+        if bounds is None:
+            first_note = self.read_note(i=0)
+            last_time = self.times[-1]
+            last_note = self.data[last_time]
+        else:
+            first_note = self.read_note(start_time=bounds[0])
+            last_note = self.read_note(start_time=bounds[1])
+        return last_note.end_time - first_note.start_time
     
     def get_bounds(self) -> tuple[float, float]:
         """return the (start_time, end_time) bounds of the note data"""
@@ -118,3 +134,24 @@ class NoteData:
             after = self.times[i]
             closest_time = before if abs(before - start_time) < abs(after - start_time) else after
         return self.data[closest_time]
+
+    def read_current_note(self, t: float) -> Note:
+        """return the note being played at time t, if any"""
+        if not self.times:
+            return None
+        
+        i = bisect_left(self.times, t)
+        if i == 0 or i == len(self.times):
+            return None
+        note_time = self.times[i]
+        note = self.data[note_time]
+
+         # this is the one scenario which could happen
+         # where the note is to the right of time t
+        if t < note.start_time:
+            j = i-1 if i-1 >= 0 else 0
+            note_time = self.times[j]
+            note = self.data[note_time]
+            return note
+
+        return note
