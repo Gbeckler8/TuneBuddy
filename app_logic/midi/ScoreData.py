@@ -152,7 +152,7 @@ class ScoreData:
         under the hood with new BPM."""
         factor = new_length / self.length
         new_bpm = round(self.bpm * factor)
-        self.change_tempo(new_bpm, factor=factor)
+        self.change_tempo(new_bpm, _factor=factor)
 
     def get_bpm(self) -> float:
         """Get BPM from music21 score. If none, default to 120 BPM."""
@@ -213,3 +213,4 @@ class ScoreData:
             elapsed_time += (length_ql / beat_ql) * sec_per_beat
 
         return beat_events
+    

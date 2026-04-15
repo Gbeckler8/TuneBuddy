@@ -155,3 +155,17 @@ class NoteData:
             return note
 
         return note
+
+    # def get_length(self):
+    #     """Return length of note data in seconds based on start and end time of first + last notes
+    #     with pitch not -1 (i.e. not unvoiced)"""
+    #     if not self.times:
+    #         return 0.0
+        
+    #     voiced_notes = [n for n in self.data.values() if n.midi_num[0] != -1]
+    #     if not voiced_notes:
+    #         return 0.0
+        
+    #     first_note = min(voiced_notes, key=lambda n: n.start_time)
+    #     last_note = max(voiced_notes, key=lambda n: n.end_time)
+    #     return last_note.end_time - first_note.start_time

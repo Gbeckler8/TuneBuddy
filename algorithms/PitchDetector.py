@@ -126,7 +126,7 @@ class PitchDetector(QObject):
         candidates = list(zip(midi_estimates, pitch_probs))
         candidates.sort(key=lambda c: c[1], reverse=True) # sort from most to least probable
         distance = self.recording.score_data.current_note().midi_num[0] - candidates[0][0]
-        print(f"detected pitch @ {start_time:.2f} sec, midi_num: {candidates[0][0]:.2f}, unvoiced_prob: {unvoiced_prob:.2f}, distance to target: {distance:.2f}")
+        # print(f"detected pitch @ {start_time:.2f} sec, midi_num: {candidates[0][0]:.2f}, unvoiced_prob: {unvoiced_prob:.2f}, distance to target: {distance:.2f}")
         pitch = Pitch(time=start_time, candidates=candidates, 
                       volume=volume, unvoiced_prob=unvoiced_prob, 
                       distance=distance, config=self.config)

@@ -297,11 +297,17 @@ class Attune(QMainWindow):
     def analyze(self):
         print("analyzing... ")
         # detect notes
+        self.active_recording.detect_notes()
         # update midi length to match recording length
             # update p.distances to reflect new midi note durations
+        l = self.active_recording.get_length()
+        self.active_recording.resize(new_length = l)
         # string edit
+
         # update scoreplot
         # update guitar hero bounds
+        self.guitar_hero.update_view_items()
+        self.slider.update_range(score_data=self.score_data, recording=self.active_recording)
         pass
 
     # --- SIGNAL-RELATED ACTIONS ---
