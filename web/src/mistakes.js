@@ -1,10 +1,10 @@
 // Client-side mistake classification over an already-fixed set of alignment
-// pairs. These are direct ports of MistakeDetector.py's CLASSIFICATION logic
-// only - not the alignment DP itself, which stays server-side via /realign
-// (pitch tolerance is baked into the DP's cost matrix and can change which
-// notes pair with which, not just whether a pairing counts as a mistake; see
-// project notes on why). Both functions here are pure threshold checks over
-// pairs that are already decided, so they're safe to run locally.
+// pairs (from /analyze - pairs never change after that, since pitch/timing
+// tolerance no longer affects the alignment DP, only whether a given pair
+// counts as a mistake). These are direct ports of MistakeDetector.py's
+// CLASSIFICATION logic only, not the alignment DP itself. Both functions
+// here are pure threshold checks over pairs that are already decided, so
+// they're safe to run locally.
 
 // Converts one of /analyze's or /notedata's serialized note arrays
 // ([id, start, end, [midi...], velocity, instrument, baseStart, baseEnd])

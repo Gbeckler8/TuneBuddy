@@ -19,7 +19,6 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 # This file lives at web/api/analyze_api.py; make the Attune project root (two
 # levels up) importable regardless of the working directory it's launched from.
@@ -28,7 +27,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from algorithms.Config import Config  # noqa: E402
-from algorithms.MistakeDetector import MistakeDetector  # noqa: E402
 from app_logic.JsonHandler import JsonHandler  # noqa: E402
 from app_logic.midi.ScoreData import ScoreData  # noqa: E402
 from app_logic.user.ds.Recording import Recording  # noqa: E402
@@ -227,66 +225,6 @@ async def note_data(score: UploadFile = File(...)) -> dict:
         "measure_onsets_og": score_data.measure_onsets_og(),
         "bpm_og": score_data.bpm_og,
         "transpose_offset": score_data.transpose_offset,
-    }
-
-
-class RealignRequest(BaseModel):
-    # Same array shape /analyze's "note_data" and /notedata's per-channel
-    # note_data already return - the client sends back exactly what it
-    # already has, no reshaping on either side.
-    user_notes: list
-    score_notes: list
-    pitch_tolerance: float
-
-
-@app.post("/realign")
-async def realign(payload: RealignRequest) -> dict:
-    """Return production string-edit pairs while applying a new classification
-    tolerance, without re-uploading audio or re-running pitch/note detection.
-    Pairing itself uses weighted absolute pitch/onset/duration errors and is
-    independent of the classification threshold; pitch_tolerance determines
-    which returned diagonal pairs are substitutions.
-
-    Only pitch tolerance goes through this endpoint - timing-mistake
-    reclassification (early/late/short/long) is a simple fixed-pairs
-    threshold check with no re-alignment involved, so that stays purely
-    client-side against /analyze's existing pairs.
-    """
-    handler = JsonHandler()
-    try:
-        user_nd = handler._note_data_from_payload(payload.user_notes)
-        score_nd = handler._note_data_from_payload(payload.score_notes)
-    except (IndexError, TypeError, ValueError) as e:
-        raise HTTPException(status_code=400, detail=f"Malformed note data: {e}")
-
-    config = Config(pitch_tolerance=payload.pitch_tolerance)
-    detector = MistakeDetector(config=config)
-    try:
-        alignment = detector.detect_mistakes(
-            user_notes=user_nd,
-            score_notes=score_nd,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Realignment failed: {e}")
-
-    # Index maps built from the SAME ordering (NoteData.times) the client's
-    # original arrays used, so returned indices resolve correctly against
-    # data the client already holds - reuses the identical helpers
-    # JsonHandler._alignment_to_payload uses for /analyze's own pairs, so
-    # indexing behavior can't drift between the two endpoints.
-    user_notes_full = [user_nd.data[t] for t in user_nd.times]
-    score_notes_full = [score_nd.data[t] for t in score_nd.times]
-    user_maps = JsonHandler._note_index_maps(user_notes_full)
-    score_maps = JsonHandler._note_index_maps(score_notes_full)
-
-    return {
-        "pairs": [
-            [
-                JsonHandler._lookup_note_index(u, user_maps),
-                JsonHandler._lookup_note_index(s, score_maps),
-            ]
-            for u, s in alignment.pairs
-        ]
     }
 
 

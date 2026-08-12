@@ -44,12 +44,6 @@
 
 <div class="results-column">
   {#if session.analysisResult}
-    {#if session.realigning}
-      <p class="status">Realigning...</p>
-    {:else if session.realignError}
-      <p class="error">{session.realignError}</p>
-    {/if}
-
     <div class="mistake-widget">
       <div class="mistake-header">
         <span>Mistakes:</span>
@@ -191,12 +185,6 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     font-family: monospace;
-  }
-  .status {
-    color: var(--text);
-  }
-  .error {
-    color: var(--danger);
   }
   .mistake-widget {
     flex: 1;

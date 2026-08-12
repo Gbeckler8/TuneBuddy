@@ -46,11 +46,41 @@ this web app doesn't otherwise have. Instead the client hashes the
 file's own bytes and caches the response itself — see
 [noteDataCache](#client-cache-notedatacachejs) below.
 
-## `POST /realign`
+## `POST /realign` (removed 2026-08-12)
 
-Re-runs *only* the pitch-alignment step at a new tolerance, given note
-data the client already has (from `/analyze` or `/notedata`) — no
-re-upload of audio, no re-running pitch/note detection.
+Used to re-run *only* the pitch-alignment step at a new tolerance, given
+note data the client already has — no re-upload of audio, no re-running
+pitch/note detection. Removed once it was confirmed to be a no-op: as
+originally written (built Jul 12), `MistakeDetector`'s own DP cost function
+gated substitution cost directly on `self.TOLERANCE` (`config.pitch_tolerance`),
+so a new tolerance genuinely could change which notes paired with which,
+and re-running the alignment made sense.
+
+Eleven days later (`c8ab97b`, "note detection param sweeps, refined mistake
+correction flow, readability refactors for algorithms," Jul 23), the
+threshold-gated cost function was replaced with a continuous
+`alignment_gamma_pitch`/`alignment_gamma_time`-weighted model that never
+references `pitch_tolerance` at all — `pitch_tolerance` survives only in
+`build_mistakes()`'s post-hoc labeling of an already-decided pair as a
+mistake or not. Nobody revisited `/realign` after that refactor. Verified
+empirically before removal: re-running `MistakeDetector.detect_mistakes()`
+against the same note data at pitch tolerances of 0.1, 0.5, and 3.0
+semitones produced byte-identical pairs every time. Since pitch-mistake
+*classification* (the part that does depend on tolerance) already runs
+client-side in `mistakes.js`, removing the endpoint changed no observable
+behavior — see `system_design.md` for the full removal.
+
+**Why this is worth keeping as a historical note, not just deleting:** the
+original design reasoning below (why call back into Python vs. port the DP
+to JS, why keep it a separate endpoint rather than merge into `/analyze`)
+was sound *for the model that existed when it was written*. The lesson is
+that an endpoint's premise can be silently invalidated by a refactor to
+code it calls into, with no compiler or type system able to catch it -
+worth an explicit check next time `MistakeDetector`'s cost model changes
+again.
+
+<details>
+<summary>Original design notes (pre-removal)</summary>
 
 **Why call back into Python instead of porting the DP to JS:** the production
 pairs come from weighted absolute pitch/onset/duration string editing, while
@@ -70,13 +100,15 @@ tolerance parameter it could be called with directly) — reverted that
 attempt (see `git log` around `algorithms/MistakeDetector.py`) once it
 became clear the actual ask was de-duplicating logic *within*
 `analyze_api.py`, not changing the shared desktop+web algorithm file.
-The two endpoints stay separate because they sit at genuinely different
+The two endpoints stayed separate because they sat at genuinely different
 costs: `/analyze` re-runs pitch detection, note detection, and the full
-mistake-correction loop (expensive, audio-bound); `/realign` re-runs one
+mistake-correction loop (expensive, audio-bound); `/realign` re-ran one
 DP alignment (cheap, called on every slider drag via `debounce`, 250ms).
-Merging them would force the expensive path to run on every tolerance
-tweak, or require a "just realign" flag that's really a second endpoint
+Merging them would have forced the expensive path to run on every tolerance
+tweak, or required a "just realign" flag that's really a second endpoint
 wearing the first one's name.
+
+</details>
 
 ## Client cache: `noteDataCache.js`
 

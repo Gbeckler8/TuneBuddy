@@ -8,7 +8,6 @@
 // in flight at a time (matching the desktop app's single active Recording),
 // so a singleton is simpler than threading context through every component.
 import { getNoteData } from "./noteDataCache.js";
-import { realign, debounce } from "./realign.js";
 import { classifyPitchMistakes, classifyTimingMistakes, noteName, noteNameToMidi, midiToHz, mistakeCategory } from "./mistakes.js";
 import { buildAnnotations } from "./annotations.js";
 import { playback } from "./playback.svelte.js";
@@ -66,10 +65,6 @@ function createSessionState() {
   let tuning = $state(440);
   let rangeError = $state("");
 
-  let realignedPairs = $state(null);
-  let realignError = $state("");
-  let realigning = $state(false);
-
   // Client-side-only mistake dismissal (see ResultsView's original note on
   // this) - keyed by mode+pairIndex+type since a pair can appear in both an
   // onset AND duration timing mistake.
@@ -91,22 +86,6 @@ function createSessionState() {
   // viewer directly, mirroring perform.py's refresh_score_viewer being
   // called explicitly rather than derived from a reactive watcher.
   const { on: onNoteDataLoaded, notify: notifyNoteDataLoaded } = makeNotifier("noteDataLoaded");
-
-  const debouncedRealign = debounce(async (tolerance) => {
-    if (!analysisResult || !noteData) return;
-    const scoreNotes = scoreNotesForActiveInstrument();
-    if (!scoreNotes) return;
-    realigning = true;
-    try {
-      const result = await realign(analysisResult.note_data, scoreNotes, tolerance, API_BASE_URL);
-      realignedPairs = result.pairs;
-      realignError = "";
-    } catch (err) {
-      realignError = err instanceof Error ? err.message : String(err);
-    } finally {
-      realigning = false;
-    }
-  }, 250);
 
   function activeInstrument() {
     if (selectedInstrument != null) return selectedInstrument;
@@ -150,7 +129,7 @@ function createSessionState() {
     return ch != null ? noteData.note_data[String(ch)] : null;
   }
 
-  let currentPairs = $derived(realignedPairs ?? analysisResult?.alignment?.pairs ?? null);
+  let currentPairs = $derived(analysisResult?.alignment?.pairs ?? null);
 
   let scoreNotesActive = $derived(scoreNotesForActiveInstrument());
 
@@ -176,16 +155,15 @@ function createSessionState() {
 
   // Score-viewer annotation payload (window.setMistakeAnnotations - see
   // annotations.js's header). Colocated here as a $derived.by rather than
-  // computed inline in App.svelte's push effect: it's fed by ~9 different
+  // computed inline in App.svelte's push effect: it's fed by several
   // mutations scattered across this module (runAnalyze, toggleOverride,
-  // setSelectedInstrument, setPitchTolerance/setTimingTolerance,
-  // debouncedRealign's completion, pickScore's own noteData/
-  // selectedInstrument writes, _resetAnalysis) - hand-wiring an explicit
-  // notify() at every one of those sites is exactly the kind of missed-site
-  // bug this whole redesign exists to eliminate (a first manual pass at that
-  // list actually missed two). A $derived.by tracks its real dependencies
-  // automatically instead, so App.svelte only has to watch this one
-  // collapsed value (see App.svelte's pushAnnotations/its $effect).
+  // setSelectedInstrument, setPitchTolerance/setTimingTolerance, pickScore's
+  // own noteData/selectedInstrument writes, _resetAnalysis) - hand-wiring an
+  // explicit notify() at every one of those sites is exactly the kind of
+  // missed-site bug this whole redesign exists to eliminate (a first manual
+  // pass at that list actually missed two). A $derived.by tracks its real
+  // dependencies automatically instead, so App.svelte only has to watch this
+  // one collapsed value (see App.svelte's pushAnnotations/its $effect).
   let annotationsPayload = $derived.by(() =>
     buildAnnotations({
       scoreNotesActive,
@@ -270,8 +248,6 @@ function createSessionState() {
     analysisResult = null;
     analyzeStatus = "idle";
     analyzeError = "";
-    realignedPairs = null;
-    realignError = "";
     overridden = new Set();
     selectedMistakeKey = null;
   }
@@ -338,7 +314,6 @@ function createSessionState() {
       analysisResult = await response.json();
       analyzeStatus = "idle";
       overridden = new Set();
-      realignedPairs = null; // fresh alignment supersedes any prior /realign result
       statusMessage = "Analysis complete.";
     } catch (err) {
       analyzeStatus = "error";
@@ -349,12 +324,9 @@ function createSessionState() {
 
   function setPitchTolerance(value) {
     pitchTolerance = value;
-    debouncedRealign(pitchTolerance); // no-op pre-analysis; guarded above
   }
 
   function setTimingTolerance(value) {
-    // No /realign: timing-mistake reclassification is a pure client-side
-    // threshold check over the existing pairs.
     timingTolerance = value;
   }
 
@@ -404,8 +376,6 @@ function createSessionState() {
     },
     get scoreColorMode() { return scoreColorMode; },
     set scoreColorMode(v) { scoreColorMode = v; },
-    get realigning() { return realigning; },
-    get realignError() { return realignError; },
     get overridden() { return overridden; },
     get statusMessage() { return statusMessage; },
     get currentPairs() { return currentPairs; },
