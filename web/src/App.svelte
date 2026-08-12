@@ -216,16 +216,16 @@
         </div>
       </div>
       <div class="overlay-pane">
-        {#if session.analysisResult && session.scoreNotesActive}
+        {#if session.scoreNotesActive}
           <NoteOverlay
             scoreNotes={session.scoreNotesActive}
-            userNotes={session.analysisResult.note_data}
+            userNotes={session.analysisResult?.note_data ?? []}
             pairs={session.currentPairs}
             pitchMistakes={session.pitchMistakes}
             timingMistakes={session.timingMistakes}
-            pitchFrames={session.analysisResult.pitch_data?.pitches}
-            vibratoPoints={session.analysisResult.vibrato?.points}
-            vibMinCycles={session.analysisResult.config?.vib_min_cycles}
+            pitchFrames={session.analysisResult?.pitch_data?.pitches}
+            vibratoPoints={session.analysisResult?.vibrato?.points}
+            vibMinCycles={session.analysisResult?.config?.vib_min_cycles}
             pitchTolerance={session.pitchTolerance}
             currentTime={playback.currentTime}
             selectedMistake={session.selectedMistake}
@@ -234,8 +234,7 @@
           />
         {:else}
           <div class="overlay-placeholder">
-            Upload a score and a recording, then click Analyze to see the
-            pitch overlay here.
+            Upload a score to see the pitch overlay here.
           </div>
         {/if}
       </div>
@@ -364,18 +363,20 @@
     border-top: 4px solid var(--border);
   }
   .overlay-placeholder {
-    /* NOT flex:1 - .overlay-pane grows to absorb whatever height
-       .score-pane's auto-fit no longer needs, so stretching this box to
-       fill 100% of an oversized .overlay-pane left a huge empty void with
-       one line of text floating in it. Sizing to its own content instead
-       (padding + text, no stretch) keeps it a normal, proportioned box that
-       sits at the top of .overlay-pane (a column flex container's default
-       main-axis alignment) - any leftover .overlay-pane height beyond that
-       is just plain background, not part of this box. */
+    /* NOT flex:1 - sized to a fixed height instead (measured from
+       NoteOverlay's actual rendered footprint: its 280px SVG + 2px border
+       + the legend row below it, ~31px including its own margin-top) so
+       swapping between this placeholder and the real NoteOverlay - which
+       now mounts as soon as a score loads, before any analysis - doesn't
+       shift .overlay-pane's height out from under the layout. Width still
+       matches via .overlay-pane's default flex stretch (no width set here
+       needed), same as NoteOverlay's own full-width SVG. */
     display: flex;
     align-items: center;
     justify-content: center;
     text-align: center;
+    height: 314.5px;
+    box-sizing: border-box;
     padding: 2rem;
     color: var(--text-secondary);
     background: var(--overlay-bg);
