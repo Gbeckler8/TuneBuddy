@@ -172,6 +172,21 @@ async def analyze(
     # the desktop app's local cache (cheap to recompute on load), so this key
     # is web-API-only, not part of the shared cache payload shape.
     payload["vibrato"] = JsonHandler._vibrato_to_payload(rec.vibrato_data)
+    # Score note timings AFTER resize_score/stabilize_score_alignment ran -
+    # the tempo-corrected times that fit this recording, not the raw parse
+    # /notedata returns. Same reasoning as vibrato above: web-API-only, added
+    # here rather than folded into to_cache_payload()/the shared cache
+    # format, since desktop has no equivalent stale-cache problem to fix (no
+    # separate pre-analysis preview step, single in-memory Recording) and
+    # would otherwise carry this field in every future .json.xz for no
+    # reason. All channels included, not just active_instrument - the tempo
+    # correction is a single score-wide change (Recording.change_tempo),
+    # so it applies uniformly across channels even though only one channel
+    # was actually aligned against the recording.
+    payload["timing_updated_note_data"] = {
+        str(channel): handler._note_data_to_payload(nd)
+        for channel, nd in score_data.note_datas.items()
+    }
     return payload
 
 

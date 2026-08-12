@@ -133,9 +133,51 @@ the next score selection just re-fetches. No `localStorage`/IndexedDB —
 there was no requirement motivating that durability, and adding it would
 be solving a problem that doesn't exist yet.
 
-**Fired eagerly, not gated on Analyze.** `UploadForm.svelte` calls
-`getNoteData()` from `handleScoreChange` (the moment a score file is
-picked), independent of whether/when the user ever clicks Analyze. This
-is what lets the tolerance widget and mistake-table structure exist
-before an analysis has run, mirroring the desktop app's score-independent
-score loading.
+**Fired eagerly, not gated on Analyze.** `sessionState.svelte.js`'s
+`pickScore()` calls `getNoteData()` the moment a score file is picked
+(via `Toolbar.svelte`'s upload handler), independent of whether/when the
+user ever clicks Analyze. This is what lets the pitch-overlay preview and
+note-click-to-seek exist before an analysis has run, mirroring the desktop
+app's score-independent score loading.
+
+**Real consumers during the pre-analysis window** - this cached data isn't
+just sitting there waiting for `/analyze`; two things read it directly,
+neither gated on `analysisResult` existing:
+
+- `NoteOverlay.svelte`'s score-note target bars (mounted the moment
+  `session.scoreNotesActive` exists, see `system_design.md` §9b) - lets you
+  see what you're aiming for before recording anything.
+- `App.svelte`'s `onNoteClicked` handler - clicking a note directly in the
+  Verovio-rendered sheet music reads `session.scoreNotesActive` to snap the
+  playback cursor to the nearest real note onset:
+  ```js
+  function onNoteClicked(viewerSec) {
+    if (playback.isPlaying) return;
+    const appT = timeMap.appTime(viewerSec, scoreInfo());
+    const starts = (session.scoreNotesActive ?? []).map((n) => n[1]);
+    if (!starts.length) {
+      playback.seek(appT);
+      return;
+    }
+    const nearest = starts.reduce((best, t) =>
+      Math.abs(t - appT) < Math.abs(best - appT) ? t : best
+    );
+    playback.seek(nearest);
+  }
+  ```
+  No gate on `analysisResult` here either - this works the instant a score
+  loads.
+
+Both read `session.scoreNotesActive`, not this cache module directly - the
+chain is `scoreNotesActive` (`sessionState.svelte.js`, a `$derived`) →
+`scoreNotesForActiveInstrument()` → `noteData.note_data[channel]` →
+`noteData`, set by `pickScore()`'s `getNoteData()` call. Today
+`scoreNotesActive` always resolves to this cache; the planned §9a timing
+fix will make it prefer `analysisResult`'s own corrected note data once an
+analysis exists, falling back to this cache only in the pre-analysis
+window - which is exactly why these two consumers are the reason the cache
+must stay read-only (see §9a's "do not write the correction back" note).
+A second, different recording against the same score would otherwise show
+the *first* recording's tempo-corrected note positions in its own
+pre-analysis preview and note-click-to-seek, despite never having been
+analyzed itself.

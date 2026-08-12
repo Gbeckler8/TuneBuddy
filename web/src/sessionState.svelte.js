@@ -129,9 +129,23 @@ function createSessionState() {
     return ch != null ? noteData.note_data[String(ch)] : null;
   }
 
+  // The tempo-stabilized score note times /analyze computes
+  // (stabilize_score_alignment) but /notedata's cache never sees, since
+  // /notedata runs before any recording exists. Falls back to the plain
+  // /notedata cache pre-analysis, or for a channel /analyze didn't include
+  // (shouldn't happen - timing_updated_note_data covers every channel, since
+  // the tempo correction is a single score-wide change, not per-channel -
+  // but the fallback costs nothing and keeps this safe either way).
+  function correctedScoreNotesForActiveInstrument() {
+    const ch = activeInstrument();
+    return ch != null ? (analysisResult?.timing_updated_note_data?.[String(ch)] ?? null) : null;
+  }
+
   let currentPairs = $derived(analysisResult?.alignment?.pairs ?? null);
 
-  let scoreNotesActive = $derived(scoreNotesForActiveInstrument());
+  let scoreNotesActive = $derived(
+    correctedScoreNotesForActiveInstrument() ?? scoreNotesForActiveInstrument()
+  );
 
   let pitchMistakes = $derived.by(() => {
     if (!currentPairs || !analysisResult || !scoreNotesActive) return [];
