@@ -114,6 +114,12 @@
   const HEIGHT = 280;
   const BAR_HEIGHT = 6;
   const PITCH_PADDING = 3;
+  // Floor on a note bar's rendered width - without this, a long score fully
+  // zoomed out squeezes most notes' actual pixel-duration below ~1px, so
+  // every note (long or short) collapses to the same barely-visible sliver.
+  // Raised from the old 1.5px floor so bars stay interpretable at any zoom;
+  // width still scales with actual duration above this floor via barWidth().
+  const MIN_BAR_WIDTH = 3;
 
   viewport.setSize(WIDTH, HEIGHT);
 
@@ -141,6 +147,11 @@
   }
   function yPos(midi) {
     return viewport.pitchToY(midi);
+  }
+  // A note bar's rendered width - its actual duration in pixels, floored at
+  // MIN_BAR_WIDTH so it never shrinks to an indistinguishable sliver.
+  function barWidth(note) {
+    return Math.max(MIN_BAR_WIDTH, xPos(note.endTime) - xPos(note.startTime));
   }
 
   // MIDI background rainbow now lives in PitchCanvas.svelte (the canvas
@@ -186,7 +197,7 @@
             : [selectedMistake.userNote, selectedMistake.scoreNote]; // timing
     return notes.filter(Boolean).map((n) => ({
       x: xPos(n.startTime),
-      width: Math.max(1.5, xPos(n.endTime) - xPos(n.startTime)),
+      width: barWidth(n),
       y: yPos(topPitch(n)) - HIGHLIGHT_HEIGHT / 2,
       height: HIGHLIGHT_HEIGHT,
     }));
@@ -410,7 +421,7 @@
     <rect
       x={xPos(note.startTime)}
       y={yPos(topPitch(note)) - BAR_HEIGHT / 2}
-      width={Math.max(1.5, xPos(note.endTime) - xPos(note.startTime))}
+      width={barWidth(note)}
       height={BAR_HEIGHT}
       fill={deletedScoreIndices.has(i) ? DELETION_COLOR : SCORE_NOTE_COLOR}
     />
@@ -420,7 +431,7 @@
     <rect
       x={xPos(note.startTime)}
       y={yPos(topPitch(note)) - BAR_HEIGHT / 2}
-      width={Math.max(1.5, xPos(note.endTime) - xPos(note.startTime))}
+      width={barWidth(note)}
       height={BAR_HEIGHT}
       fill={userNoteColor(i)}
       class="user-note"
