@@ -255,7 +255,14 @@ function createPlaybackState() {
   async function play() {
     await ensureInit();
     if (!synth || !currentNoteData) return;
-    if (lastLoadedKey == null) await reload();
+    // resume:true - without it, reload() only preserves currentTime as the
+    // resume position when `wasPlaying` is already true (isPlaying is only
+    // set true further down, after this returns), so the very first Play
+    // press after seeking/pausing at a nonzero currentTime silently rebuilt
+    // the SMF and started from tick 0 instead - the actual audio position
+    // reset, not just the pitch-overlay view. Harmless when currentTime is
+    // already 0 (secondsToTicks(0,...) = 0, so the resume seek is skipped).
+    if (lastLoadedKey == null) await reload({ resume: true });
     if (context.state === "suspended") await context.resume();
 
     // pressing Play right after reaching the end should restart, not
