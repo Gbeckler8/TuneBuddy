@@ -14,6 +14,7 @@
   //   - a solid green playhead line at the current playback time
   //     (GuitarHero.timeline, pg.InfiniteLine, colors['timeline'] =
   //     mkPen(0, 255, 0, 255))
+  import { untrack } from "svelte";
   import { noteFromArray, noteName } from "./mistakes.js";
   import { meanVolume, volumeFrac, volumeRangeDb } from "./colors.js";
   import { vibratoNoteSummary } from "./noteCurve.js";
@@ -379,12 +380,18 @@
   // Desktop's move_plot/timeline_offset scrolling-window behavior (§11e):
   // keeps the playhead in view by sliding the window (at its current zoom
   // span) as currentTime advances, unless the user has manually taken over
-  // via drag/wheel above. A no-op while the window already covers the full
-  // take (span unchanged, nowhere to slide within content bounds) - only
-  // visible once the user has zoomed in.
+  // via drag/wheel above. follow() reads viewport.t0/t1 internally (to
+  // preserve the current zoom span) - without untrack(), that read makes
+  // t0/t1 tracked dependencies of THIS effect too, so its own write
+  // re-triggers itself on every call. Confirmed empirically: without
+  // untrack(), this fired ~73x/sec during real playback against a 10Hz
+  // currentTime poll - correct end position each time (the extra runs are
+  // idempotent no-ops once converged), but 7x more reactive work than
+  // needed. untrack() keeps the effect's dependencies to exactly
+  // followEnabled + currentTime, matching the actual 10Hz update rate.
   $effect(() => {
     if (viewport.followEnabled && currentTime != null) {
-      viewport.follow(currentTime);
+      untrack(() => viewport.follow(currentTime));
     }
   });
 

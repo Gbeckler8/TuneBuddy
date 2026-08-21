@@ -18,6 +18,7 @@ import { AudioWorkletNodeSynthesizer, Constants } from "js-synthesizer";
 import { buildSMF, ticksToSeconds, secondsToTicks } from "./smf.js";
 import { noteFromArray } from "./mistakes.js";
 import { makeNotifier } from "./notifier.js";
+import { viewport } from "./viewportState.svelte.js";
 
 const SYNTH_BASE = "/synth";
 const SOUNDFONT_URL = `${SYNTH_BASE}/MuseScore_General.sf3`;
@@ -262,6 +263,15 @@ function createPlaybackState() {
     if (duration && currentTime >= duration) {
       seek(0);
     }
+
+    // A prior manual pan/zoom on the pitch overlay (NoteOverlay.svelte)
+    // disables auto-follow so it doesn't fight the user mid-drag - but
+    // that shouldn't survive past a single playback session, or "always
+    // follows during playback" silently breaks the moment anyone touches
+    // the overlay once. Re-arming on every Play press (not just the first)
+    // means dragging while paused to look around never permanently loses
+    // follow - it always comes back the next time playback starts.
+    viewport.enableFollow();
 
     await synth.playPlayer();
     isPlaying = true;
