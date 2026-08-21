@@ -15,9 +15,12 @@
   //     (GuitarHero.timeline, pg.InfiniteLine, colors['timeline'] =
   //     mkPen(0, 255, 0, 255))
   import { noteFromArray, noteName } from "./mistakes.js";
-  import { meanVolume, volumeFrac, volumeRangeDb, viridis, cssRgb } from "./colors.js";
+  import { meanVolume, volumeFrac, volumeRangeDb } from "./colors.js";
   import { vibratoNoteSummary } from "./noteCurve.js";
   import { getVoicedPitchFrames } from "./PitchFrameHandler.js";
+  import { alignHue, hsl } from "./pitchColorRamp.js";
+  import { viewport } from "./viewportState.svelte.js";
+  import PitchCanvas from "./PitchCanvas.svelte";
 
   let {
     scoreNotes,
@@ -35,46 +38,9 @@
     onSeek = null,
   } = $props();
 
-  // --- GuitarHero.MidiBackground, ported exactly ---
-  const LETTER_RGB = {
-    A: [230, 60, 60],
-    B: [255, 150, 40],
-    C: [245, 220, 70],
-    D: [70, 200, 90],
-    E: [70, 140, 240],
-    F: [100, 90, 210],
-    G: [170, 90, 210],
-  };
-  const PC_TO_LETTER = ["C", "C", "D", "D", "E", "F", "F", "G", "G", "A", "A", "B"];
-  const isSharp = (m) => [1, 3, 6, 8, 10].includes(((m % 12) + 12) % 12);
-  function midiToRgba(m, alpha = 0.2) {
-    const letter = PC_TO_LETTER[((m % 12) + 12) % 12];
-    let [r, g, b] = LETTER_RGB[letter];
-    if (isSharp(m)) {
-      r *= 0.7;
-      g *= 0.7;
-      b *= 0.7;
-    }
-    return `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${alpha})`;
-  }
-
-  // --- GuitarHero._build_align_brushes / get_align_distance_brush, ported ---
-  // QColor.setHsv(hue, 255, 255) (full saturation+value) is exactly
-  // hsl(hue, 100%, 50%) - same color space, no conversion loss.
-  const ALIGN_MAX_MULT = 4.0;
-  function alignHue(distance, tolerance) {
-    const greenThresh = Math.max(tolerance, 0);
-    const maxDist = Math.max(ALIGN_MAX_MULT * greenThresh, greenThresh + 0.05);
-    const d = Math.min(Math.abs(distance), maxDist);
-    if (d <= greenThresh) return 120;
-    const frac = Math.max(0, Math.min(1, (d - greenThresh) / (maxDist - greenThresh)));
-    return 120 * (1 - frac);
-  }
-  const hsl = (hue, alpha = 1) => `hsla(${hue}, 100%, 50%, ${alpha})`;
-
   const SCORE_NOTE_COLOR = "rgba(255, 255, 255, 0.78)";
   const DELETION_COLOR = "rgba(255, 0, 0, 0.78)";
-  const INSERTION_COLOR = "rgba(0, 200, 0, 0.78)";
+  const INSERTION_COLOR = DELETION_COLOR;
   const MATCH_LINE_COLOR = "rgba(255, 255, 255, 0.55)";
 
   let mistakeByUserIdx = $derived(
@@ -87,41 +53,32 @@
   let scoreNotesParsed = $derived(scoreNotes.map(noteFromArray));
   let userNotesParsed = $derived(userNotes.map(noteFromArray));
 
-  // --- GuitarHero.update_user_items' pitch scatter, ported ---
-  // Only the first (most probable) candidate is plotted per frame, matching
-  // GuitarHero's `break` after the first candidate_pitches entry. Voicing
-  // filter (PitchData.is_voiced_pitch) lives in getVoicedPitchFrames now.
-  const REST_COLOR = "rgb(140, 140, 140)";
-
   // --- GuitarHero's own "Colors:" dropdown (color_mode) - independent of
   // ScoreViewer's scoreColorMode: pitch (distance-from-target ramp, default)
   // or volume (viridis ramp over this take's own loudest/quietest frame).
-  // Only the pitch-frame scatter dots recolor - note bars always stay on the
-  // mistake-based coloring above (PitchDataUI.update_view, ported).
+  // Only the pitch-frame scatter dots (drawn by PitchCanvas now) recolor -
+  // note bars always stay on the mistake-based coloring above
+  // (PitchDataUI.update_view, ported). The <select> UI stays here since it's
+  // part of this file's interactive legend row; colorMode is just passed
+  // down as a prop.
   let colorMode = $state("pitch");
   let volumeRange = $derived(pitchFrames ? volumeRangeDb(pitchFrames) : [null, null]);
 
-  let pitchPoints = $derived.by(() => {
-    if (!pitchFrames) return [];
-    const points = [];
+  // Bounds-only pass over the pitch track (time + first-candidate midi per
+  // voiced frame, no coloring) - feeds allTimes/allPitches below so
+  // viewport.fitToContent still includes the full pitch trace, without
+  // duplicating PitchCanvas's own full pitchPoints-with-color derivation.
+  let pitchExtent = $derived.by(() => {
+    if (!pitchFrames) return { times: [], midis: [] };
+    const times = [];
+    const midis = [];
     for (const frame of getVoicedPitchFrames(pitchFrames, -Infinity, Infinity)) {
-      const [time, candidates, volume, , , alignedDistance, isTransition] = frame;
+      const [time, candidates] = frame;
       if (!candidates || candidates.length === 0) continue;
-      const midi = candidates[0][0];
-      let color;
-      if (colorMode === "volume") {
-        const frac = volumeFrac(volume, volumeRange[0], volumeRange[1]);
-        color = cssRgb(viridis(frac));
-      } else {
-        color = isTransition
-          ? REST_COLOR
-          : alignedDistance != null
-            ? hsl(alignHue(alignedDistance, pitchTolerance))
-            : REST_COLOR;
-      }
-      points.push({ time, midi, color });
+      times.push(time);
+      midis.push(candidates[0][0]);
     }
-    return points;
+    return { times, midis };
   });
 
   function topPitch(note) {
@@ -144,48 +101,52 @@
   let allTimes = $derived([
     ...scoreNotesParsed.flatMap((n) => [n.startTime, n.endTime]),
     ...userNotesParsed.flatMap((n) => [n.startTime, n.endTime]),
-    ...pitchPoints.map((p) => p.time),
+    ...pitchExtent.times,
   ]);
   let allPitches = $derived(
     [
       ...[...scoreNotesParsed, ...userNotesParsed].map(topPitch).filter((p) => Number.isFinite(p)),
-      ...pitchPoints.map((p) => p.midi),
+      ...pitchExtent.midis,
     ]
   );
 
   const WIDTH = 800;
   const HEIGHT = 280;
   const BAR_HEIGHT = 6;
-  const PITCH_DOT_RADIUS = 2.5;
   const PITCH_PADDING = 3;
 
-  let minTime = $derived(allTimes.length ? Math.min(...allTimes) : 0);
-  let maxTime = $derived(allTimes.length ? Math.max(...allTimes) : 1);
-  let minPitch = $derived((allPitches.length ? Math.min(...allPitches) : 60) - PITCH_PADDING);
-  let maxPitch = $derived((allPitches.length ? Math.max(...allPitches) : 72) + PITCH_PADDING);
+  viewport.setSize(WIDTH, HEIGHT);
 
-  function xPos(t) {
-    const span = maxTime - minTime || 1;
-    return ((t - minTime) / span) * WIDTH;
-  }
-  function yPos(midi) {
-    const span = maxPitch - minPitch || 1;
-    return HEIGHT - ((midi - minPitch) / span) * HEIGHT;
-  }
+  // This take's full data extent - feeds viewport.fitToContent below.
+  // Rendering reads viewport.t0/t1/pitchMin/pitchMax (the *visible* window),
+  // not these, so pan/zoom only narrows the view rather than needing its
+  // own copy of the take's bounds (system_design.md §11b: one shared
+  // transform, so the future canvas dot layer can't drift out of pixel
+  // alignment with these SVG note boxes).
+  let contentMinTime = $derived(allTimes.length ? Math.min(...allTimes) : 0);
+  let contentMaxTime = $derived(allTimes.length ? Math.max(...allTimes) : 1);
+  let contentMinPitch = $derived((allPitches.length ? Math.min(...allPitches) : 60) - PITCH_PADDING);
+  let contentMaxPitch = $derived((allPitches.length ? Math.max(...allPitches) : 72) + PITCH_PADDING);
 
-  // one thin horizontal band per semitone in view, colored by the MIDI
-  // rainbow key scheme - the piano-roll background GuitarHero always shows.
-  let midiBands = $derived.by(() => {
-    const bands = [];
-    const lo = Math.floor(minPitch);
-    const hi = Math.ceil(maxPitch);
-    for (let m = lo; m <= hi; m++) {
-      bands.push({ midi: m, y: yPos(m + 0.5), color: midiToRgba(m) });
-    }
-    return bands;
+  // Resets the visible window to fully-zoomed-out whenever the take's actual
+  // extent changes (new score, new analysis) - not on every render, since
+  // $effect only reruns when one of these derived numbers actually changes
+  // value, not just recomputes to the same number.
+  $effect(() => {
+    viewport.fitToContent(contentMinTime, contentMaxTime, contentMinPitch, contentMaxPitch);
   });
 
-  const semitoneHeight = $derived(HEIGHT / (maxPitch - minPitch || 1));
+  function xPos(t) {
+    return viewport.timeToX(t);
+  }
+  function yPos(midi) {
+    return viewport.pitchToY(midi);
+  }
+
+  // MIDI background rainbow now lives in PitchCanvas.svelte (the canvas
+  // layer, drawn beneath this SVG) - only semitoneHeight (note-bar/hit-
+  // target sizing) is still needed here.
+  const semitoneHeight = $derived(HEIGHT / (viewport.pitchMax - viewport.pitchMin || 1));
 
   // dashed lines between matched/substituted pairs (both sides present) -
   // mirrors GuitarHero's match_lines (goods + subs, not insertions/deletions).
@@ -331,26 +292,116 @@
     else if (ev.key === "Escape") { closePopup(); }
   }
 
+  // --- Pan/zoom (system_design.md §11e) - drag pans both axes, wheel zooms
+  // both axes centered on the cursor, mirroring GuitarHero's pyqtgraph
+  // ViewBox (drag-to-pan, scroll-to-zoom, both axes together). Lives here
+  // (the SVG layer) since it's the top-most layer and already receives
+  // pointer events - PitchCanvas underneath just reacts to the shared
+  // `viewport` changing, same as it already does for the playhead.
+  let isDragging = $state(false);
+  let dragStart = null; // plain object (math only, not UI state) - {startX, startY, t0, t1, pitchMin, pitchMax}
+  let didDrag = false; // distinguishes an actual drag from a plain click, so a drag doesn't also fire closePopup/note-select
+
+  function handleBackgroundMouseDown(ev) {
+    if (ev.button !== 0) return; // left button/primary touch only
+    viewport.disableFollow(); // manual pan takes over from auto-follow
+    dragStart = {
+      startX: ev.clientX,
+      startY: ev.clientY,
+      t0: viewport.t0,
+      t1: viewport.t1,
+      pitchMin: viewport.pitchMin,
+      pitchMax: viewport.pitchMax,
+    };
+    didDrag = false;
+    isDragging = true;
+  }
+
+  function handleWindowMouseMove(ev) {
+    if (!dragStart) return;
+    const dxPx = ev.clientX - dragStart.startX;
+    const dyPx = ev.clientY - dragStart.startY;
+    if (!didDrag && (Math.abs(dxPx) > 3 || Math.abs(dyPx) > 3)) didDrag = true;
+    if (!didDrag) return;
+    const timeSpan = dragStart.t1 - dragStart.t0;
+    const pitchSpan = dragStart.pitchMax - dragStart.pitchMin;
+    const dt = -(dxPx / viewport.width) * timeSpan;
+    const dp = (dyPx / viewport.height) * pitchSpan; // screen y grows downward, pitch grows upward
+    viewport.setWindow(dragStart.t0 + dt, dragStart.t1 + dt);
+    viewport.setPitchWindow(dragStart.pitchMin + dp, dragStart.pitchMax + dp);
+  }
+
+  function handleWindowMouseUp() {
+    dragStart = null;
+    isDragging = false;
+  }
+
+  // Wraps the existing closePopup click-to-dismiss - a drag shouldn't also
+  // close the popup, since the mouseup after a drag still fires a native
+  // click on whatever the pointer ends up over.
+  function handleOverlayClick() {
+    if (didDrag) { didDrag = false; return; }
+    closePopup();
+  }
+
+  const ZOOM_FACTOR = 1.05;
+  function handleWheel(ev) {
+    ev.preventDefault();
+    viewport.disableFollow(); // manual zoom takes over from auto-follow
+    const rect = ev.currentTarget.getBoundingClientRect();
+    const centerT = viewport.xToTime(ev.clientX - rect.left);
+    const centerP = viewport.yToPitch(ev.clientY - rect.top);
+    const factor = ev.deltaY > 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
+    viewport.zoomAt(centerT, factor);
+    viewport.zoomPitchAt(centerP, factor);
+  }
+
+  // A full reset is a strong "give me back the default view" signal, so it
+  // also hands control back to auto-follow - otherwise a manual pan/zoom
+  // earlier in the session would silently keep auto-follow off forever.
+  function handleDoubleClick() {
+    viewport.resetView();
+    viewport.enableFollow();
+  }
+
+  // Desktop's move_plot/timeline_offset scrolling-window behavior (§11e):
+  // keeps the playhead in view by sliding the window (at its current zoom
+  // span) as currentTime advances, unless the user has manually taken over
+  // via drag/wheel above. A no-op while the window already covers the full
+  // take (span unchanged, nowhere to slide within content bounds) - only
+  // visible once the user has zoomed in.
+  $effect(() => {
+    if (viewport.followEnabled && currentTime != null) {
+      viewport.follow(currentTime);
+    }
+  });
+
   // dims the hovered note's own pitch dots (GuitarHero._hover_span) so its
-  // frame-by-frame detail reads clearly against the flat summary bar
+  // frame-by-frame detail reads clearly against the flat summary bar - the
+  // dots themselves are drawn by PitchCanvas now, so this is just passed
+  // down as a prop instead of used to set an opacity attribute directly.
   let hoveredSpan = $derived(
     hoveredNoteIdx != null && userNotesParsed[hoveredNoteIdx]
       ? [userNotesParsed[hoveredNoteIdx].startTime, userNotesParsed[hoveredNoteIdx].endTime]
       : null
   );
-  function pitchDotOpacity(t) {
-    return hoveredSpan && t >= hoveredSpan[0] && t <= hoveredSpan[1] ? 0.35 : 1;
-  }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onmousemove={handleWindowMouseMove} onmouseup={handleWindowMouseUp} />
 
 <div class="overlay-wrap">
-<svg viewBox="0 0 {WIDTH} {HEIGHT}" class="overlay" role="img" aria-label="Pitch overlay" onclick={closePopup}>
-  {#each midiBands as band}
-    <rect x="0" y={band.y - semitoneHeight / 2} width={WIDTH} height={semitoneHeight} fill={band.color} />
-  {/each}
-
+<PitchCanvas {pitchFrames} {colorMode} {pitchTolerance} {currentTime} {hoveredSpan} />
+<svg
+  viewBox="0 0 {viewport.width} {viewport.height}"
+  class="overlay"
+  class:dragging={isDragging}
+  role="img"
+  aria-label="Pitch overlay"
+  onclick={handleOverlayClick}
+  onmousedown={handleBackgroundMouseDown}
+  onwheel={handleWheel}
+  ondblclick={handleDoubleClick}
+>
   {#each matchLines as line}
     <line x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2} class="match-line" />
   {/each}
@@ -376,14 +427,6 @@
       class:hovered={hoveredNoteIdx === i}
     />
   {/each}
-
-  {#each pitchPoints as p}
-    <circle cx={xPos(p.time)} cy={yPos(p.midi)} r={PITCH_DOT_RADIUS} fill={p.color} opacity={pitchDotOpacity(p.time)} />
-  {/each}
-
-  {#if currentTime != null && currentTime >= minTime && currentTime <= maxTime}
-    <line x1={xPos(currentTime)} y1="0" x2={xPos(currentTime)} y2={HEIGHT} class="playhead" />
-  {/if}
 
   {#each highlightRects as r}
     <rect x={r.x} y={r.y} width={r.width} height={r.height} class="mistake-highlight" class:overridden={selectedMistakeOverridden} />
@@ -455,22 +498,23 @@
 </div>
 
 <style>
+  /* Transparent and unstyled - PitchCanvas (position:absolute, same box)
+     underneath supplies the background/border/border-radius now, so this
+     SVG layer only paints its own note bars/lines/hit-targets on top of it. */
   .overlay {
+    position: relative;
     width: 100%;
     height: 280px;
-    background: rgb(20, 20, 25);
-    border: 1px solid var(--border);
-    border-radius: 4px;
+    cursor: grab;
+    touch-action: none; /* mousedown/move drag-to-pan owns pointer input here, not browser scroll/zoom gestures */
+  }
+  .overlay.dragging {
+    cursor: grabbing;
   }
   .match-line {
     stroke: rgba(255, 255, 255, 0.55);
     stroke-width: 1.5;
     stroke-dasharray: 4, 3;
-  }
-  /* GuitarHero.timeline: solid green, above everything else in the plot */
-  .playhead {
-    stroke: rgb(0, 255, 0);
-    stroke-width: 1.5;
   }
   /* GuitarHero.highlight_bar: red normally, green if the mistake is
      overridden - exact brush/pen values (255,80,80)/(80,255,80), alpha
