@@ -59,19 +59,41 @@ function createViewportState() {
     return pitchMin + ((height - y) / height) * span;
   }
 
-  // Establishes both the default zoomed-out window and the pan/zoom clamp
-  // bounds from the take's own data extent - the direct replacement for
-  // NoteOverlay's old per-render minTime/maxTime/minPitch/maxPitch
-  // derivation. Resets the current window to show everything; call this
-  // whenever the underlying note/pitch data changes (new score picked, new
-  // analysis result), not on every render.
+  // A fixed time-to-pixel density for the *default* window, mirroring
+  // Desktop's GuitarHero: it never squeezes an entire multi-minute take
+  // into the plot at once - it shows a comfortable, fixed-scale slice and
+  // scrolls (move_plot/timeline_offset) to reveal the rest. Squeezing
+  // everything into view (the old behavior here) is what made note bars on
+  // a long score collapse into indistinguishable slivers - not a rendering
+  // bug, a wrong default zoom. Kept low (not, say, 60px/sec) deliberately -
+  // tested against a real container width and an 8s demo clip: at 60px/sec
+  // even that short take no longer fit by default, which is a bigger
+  // behavior change than intended (this should only kick in for genuinely
+  // long takes). At 30px/sec a typical ~300-700px panel still shows 10-23s
+  // fully - comfortably covering every current demo clip (8-18s) - while a
+  // 3+ minute take still gets windowed instead of squeezed to slivers. A
+  // 120bpm quarter note (~0.5s) still renders ~15px wide at this density,
+  // clearly readable.
+  const DEFAULT_PX_PER_SEC = 30;
+
+  // Establishes the pan/zoom clamp bounds from the take's own data extent,
+  // and resets the *default* window - a fixed-density slice starting at the
+  // beginning, clamped to the take's own length so a short clip (shorter
+  // than the default window) still shows in full, matching today's
+  // short-demo behavior unchanged. Call whenever the underlying note/pitch
+  // data changes (new score picked, new analysis result), not on every
+  // render.
   function fitToContent(minTime, maxTime, minPitch, maxPitch) {
     contentT0 = minTime;
     contentT1 = maxTime;
     contentPitchMin = minPitch;
     contentPitchMax = maxPitch;
+
+    const contentSpan = maxTime - minTime || MIN_TIME_SPAN;
+    const defaultSpan = Math.min(contentSpan, width / DEFAULT_PX_PER_SEC || contentSpan);
     t0 = minTime;
-    t1 = maxTime;
+    t1 = minTime + defaultSpan;
+
     pitchMin = minPitch;
     pitchMax = maxPitch;
   }

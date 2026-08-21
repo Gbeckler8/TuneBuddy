@@ -114,12 +114,13 @@
   const HEIGHT = 280;
   const BAR_HEIGHT = 6;
   const PITCH_PADDING = 3;
-  // Floor on a note bar's rendered width - without this, a long score fully
-  // zoomed out squeezes most notes' actual pixel-duration below ~1px, so
-  // every note (long or short) collapses to the same barely-visible sliver.
-  // Raised from the old 1.5px floor so bars stay interpretable at any zoom;
-  // width still scales with actual duration above this floor via barWidth().
-  const MIN_BAR_WIDTH = 3;
+  // A defensive floor only - real readability now comes from
+  // viewport.fitToContent's fixed pixels-per-second default zoom
+  // (viewportState.svelte.js), which keeps width genuinely proportional to
+  // duration instead of squeezing an entire long take into view. This just
+  // guards against a literal 0px rect from float rounding on a very short
+  // grace note, even at a sane zoom level.
+  const MIN_BAR_WIDTH = 1;
 
   viewport.setSize(WIDTH, HEIGHT);
 
