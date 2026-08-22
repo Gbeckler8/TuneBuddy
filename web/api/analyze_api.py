@@ -68,6 +68,7 @@ async def analyze(
     fmin: float | None = Form(None),
     fmax: float | None = Form(None),
     tuning: float | None = Form(None),
+    transpose_semitones: int | None = Form(None),
 ) -> dict:
     """`pitch_tolerance`, if given, overrides Config's 0.5-semitone default for
     this analysis's alignment step - lets a user who already adjusted the
@@ -89,7 +90,18 @@ async def analyze(
     particular is a real accuracy lever, not just a display concern -
     narrowing it to the piece's actual pitch span (the client defaults it to
     the score's own range, not the wide general-purpose default) measurably
-    reduces PYIN octave-error candidates."""
+    reduces PYIN octave-error candidates.
+
+    `transpose_semitones`, if given, shifts the score (MIDI playback, the
+    music21/MusicXML score, and every channel's NoteData - see
+    ScoreData.transpose) BEFORE Recording/PitchDetector/MistakeDetector ever
+    see it, so pitch detection, alignment, and mistake classification all run
+    against the transposed score - mirrors desktop's on_transpose_applied ->
+    update_alignment_distances() re-scoring an existing take after a
+    transpose. Always the TOTAL shift from the original, untransposed score
+    (this endpoint reloads the score fresh from the uploaded file every call,
+    so there's no persisted state to apply an incremental delta against -
+    unlike desktop's long-lived ScoreData, which accumulates it)."""
     #checking filetype
     score_suffix = await check_upload_file(score, SUPPORTED_SCORE_EXTENSIONS)
     # AudioData.load_data only special-cases .m4a (via pydub); everything else
@@ -108,6 +120,8 @@ async def analyze(
         try:
             score_data = ScoreData()
             score_data.load(str(score_path))
+            if transpose_semitones:
+                score_data.transpose(dy=transpose_semitones)
             if active_instrument is not None:
                 if active_instrument not in score_data.note_datas:
                     raise HTTPException(
@@ -191,7 +205,10 @@ async def analyze(
 
 
 @app.post("/notedata")
-async def note_data(score: UploadFile = File(...)) -> dict:
+async def note_data(
+    score: UploadFile = File(...),
+    transpose_semitones: int | None = Form(None),
+) -> dict:
     """Parse an uploaded score and return its note-by-note data, per
     instrument channel. No GET counterpart by design - the client caches this
     response itself (keyed by a hash of the score file's content) rather than
@@ -199,8 +216,17 @@ async def note_data(score: UploadFile = File(...)) -> dict:
     in note_data[channel] corresponds to index i in /analyze's alignment pairs
     for that same channel (both walk NoteData.times, which is kept sorted) -
     verified against app_logic/NoteData.py, not assumed.
+
+    `transpose_semitones`, like /analyze's own param of the same name, is
+    always the TOTAL shift from the original score, not an incremental
+    delta - see /analyze's docstring for why. The client caches each distinct
+    (score, transpose_semitones) pair separately (noteDataCache.js), so a
+    transposed and an untransposed request for the same file are just two
+    independent cache entries, not a mutation of one.
     """
     score_data = await _parse_uploaded_score(score)
+    if transpose_semitones:
+        score_data.transpose(dy=transpose_semitones)
     # _note_data_to_payload doesn't touch JsonHandler's own recording state,
     # so a handler with no Recording attached is fine here - reusing it avoids
     # a second implementation of the same note serialization drifting out of

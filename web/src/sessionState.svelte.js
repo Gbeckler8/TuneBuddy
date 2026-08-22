@@ -65,6 +65,16 @@ function createSessionState() {
   let tuning = $state(440);
   let rangeError = $state("");
 
+  // Transpose (SettingsWidget's Transpose row) - always the TOTAL shift from
+  // the ORIGINAL score, not an incremental delta (see analyze_api.py's
+  // /notedata docstring for why: this endpoint reloads the score fresh from
+  // the file every call, so there's no persisted ScoreData to accumulate an
+  // incremental delta against the way desktop's does). Computed client-side
+  // in setTranspose() below from whatever the user types as a target note
+  // name, same UX as desktop's SettingsWidget._on_transpose_apply.
+  let transposeSemitones = $state(0);
+  let transposeError = $state("");
+
   // Client-side-only mistake dismissal (see ResultsView's original note on
   // this) - keyed by mode+pairIndex+type since a pair can appear in both an
   // onset AND duration timing mistake.
@@ -121,6 +131,22 @@ function createSessionState() {
     const range = computeDefaultRange(activeInstrument());
     lowNoteName = range?.low ?? DEFAULT_LOW;
     highNoteName = range?.high ?? DEFAULT_HIGH;
+  }
+
+  // The active instrument's first (earliest-onset) voiced note's MIDI
+  // number - mirrors ScoreData.first_note_midi(), skipping rest/negative
+  // entries. Reflects whatever noteData CURRENTLY holds (post-transpose if
+  // one's already been applied), not the original score - setTranspose
+  // below uses this as its reference point for the next incremental nudge,
+  // same as desktop's _on_transpose_apply computing delta against the
+  // CURRENT first note, not the original one.
+  function firstNoteMidiForActiveInstrument() {
+    const rawNotes = scoreNotesForActiveInstrument();
+    if (!rawNotes || rawNotes.length === 0) return null;
+    for (const m of rawNotes[0][3]) {
+      if (m != null && m >= 0) return m;
+    }
+    return null;
   }
 
   function scoreNotesForActiveInstrument() {
@@ -270,6 +296,8 @@ function createSessionState() {
     scoreFile = file;
     noteDataError = "";
     selectedInstrument = null;
+    transposeSemitones = 0;
+    transposeError = "";
     _resetAnalysis();
     if (!file) {
       noteData = null;
@@ -315,6 +343,9 @@ function createSessionState() {
     if (lowMidi != null) formData.append("fmin", String(midiToHz(lowMidi, tuning)));
     if (highMidi != null) formData.append("fmax", String(midiToHz(highMidi, tuning)));
     formData.append("tuning", String(tuning));
+    if (transposeSemitones) {
+      formData.append("transpose_semitones", String(transposeSemitones));
+    }
 
     try {
       const response = await fetch(`${API_BASE_URL}/analyze`, {
@@ -370,6 +401,43 @@ function createSessionState() {
     tuning = hz;
   }
 
+  // targetNoteName: what the user wants the active instrument's first note
+  // to read as (e.g. "D4") - mirrors desktop's transpose input exactly.
+  // Computes the incremental nudge needed from the CURRENT first note,
+  // accumulates it into the running total-from-original transposeSemitones,
+  // then re-fetches note data at that total (see /notedata's docstring for
+  // why it's a total, not a delta, sent to the stateless backend) and,
+  // mirroring desktop's on_transpose_applied -> update_alignment_distances(),
+  // re-runs analysis if a take already exists - otherwise the mistake table
+  // and pitch overlay would keep comparing user notes against the OLD,
+  // untransposed score.
+  async function setTranspose(targetNoteName) {
+    const targetMidi = noteNameToMidi(targetNoteName);
+    if (targetMidi == null) {
+      transposeError = `Couldn't parse "${targetNoteName}" as a note name (e.g. C4, F#3, Bb2).`;
+      return;
+    }
+    const currentFirstMidi = firstNoteMidiForActiveInstrument();
+    if (currentFirstMidi == null) return;
+    const incrementalDelta = targetMidi - currentFirstMidi;
+    if (incrementalDelta === 0) {
+      transposeError = "";
+      return;
+    }
+    transposeError = "";
+    const nextTotal = transposeSemitones + incrementalDelta;
+    try {
+      noteData = await getNoteData(scoreFile, API_BASE_URL, nextTotal);
+      transposeSemitones = nextTotal;
+      applyDefaultRangeForActiveInstrument();
+      if (audioFile && analysisResult) {
+        await runAnalyze();
+      }
+    } catch (err) {
+      transposeError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   return {
     get scoreFile() { return scoreFile; },
     get audioFile() { return audioFile; },
@@ -404,6 +472,12 @@ function createSessionState() {
     get highNoteName() { return highNoteName; },
     get tuning() { return tuning; },
     get rangeError() { return rangeError; },
+    get transposeSemitones() { return transposeSemitones; },
+    get transposeError() { return transposeError; },
+    get firstNoteName() {
+      const midi = firstNoteMidiForActiveInstrument();
+      return midi != null ? noteName(midi) : "";
+    },
     get selectedMistake() { return selectedMistake; },
     get selectedMistakeKey() { return selectedMistakeKey; },
 
@@ -415,6 +489,7 @@ function createSessionState() {
     setSelectedInstrument,
     setRange,
     setTuning,
+    setTranspose,
     overrideKey,
     toggleOverride,
     selectMistake,

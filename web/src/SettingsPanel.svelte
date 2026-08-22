@@ -1,11 +1,11 @@
 <script>
   // Ports ui/info/SettingsWidget.py's row structure exactly: Instrument,
   // Range, Tuning, Transpose, each a label + control(s) + checkmark Apply
-  // button. Instrument, Range, and Tuning are wired to something real
-  // (score_data has multiple channels; Range/Tuning feed Config.fmin/fmax/
-  // tuning, which PitchDetector reads directly - see analyze_api.py).
-  // Transpose maps to ScoreData.transpose_offset server-side, but nothing
-  // sends it yet, so it stays disabled rather than half-wired.
+  // button, all wired to something real. Transpose maps to
+  // ScoreData.transpose(dy=...) server-side (analyze_api.py's /notedata and
+  // /analyze both accept transpose_semitones) - distinct from
+  // ScoreData.transpose_offset, an unrelated TIME-alignment field with a
+  // confusingly similar name (see scoreTimeMap.js).
   import { session } from "./sessionState.svelte.js";
 
   const ICONS = "/icons";
@@ -46,6 +46,19 @@
 
   function applyTuning() {
     session.setTuning(parseFloat(pendingTuning));
+  }
+
+  // Syncs to the active instrument's CURRENT first note whenever score/
+  // instrument/transpose changes - mirrors SettingsWidget's
+  // _sync_transpose_input, so the field always shows "what note does the
+  // piece start on right now" rather than carrying over a stale typed value.
+  let pendingTranspose = $state(session.firstNoteName);
+  $effect(() => {
+    pendingTranspose = session.firstNoteName;
+  });
+
+  function applyTranspose() {
+    session.setTranspose(pendingTranspose.trim());
   }
 </script>
 
@@ -93,11 +106,14 @@
   <div class="row">
     <img src="{ICONS}/circle-help.svg" alt="" class="help-icon" title="Shift the score's displayed/matched pitch by a fixed interval." />
     <label for="transpose-input">Transpose:</label>
-    <input id="transpose-input" type="text" placeholder="C4" disabled title="Not yet wired to the backend" />
-    <button class="apply-btn" disabled title="Apply transpose">
+    <input id="transpose-input" type="text" placeholder="C4" bind:value={pendingTranspose} disabled={!session.noteData} />
+    <button class="apply-btn" onclick={applyTranspose} disabled={!session.noteData} title="Apply transpose">
       <img src="{ICONS}/check.svg" alt="Apply" />
     </button>
   </div>
+  {#if session.transposeError}
+    <p class="field-error">{session.transposeError}</p>
+  {/if}
 </div>
 
 <style>

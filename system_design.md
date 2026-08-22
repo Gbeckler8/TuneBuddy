@@ -550,3 +550,214 @@ it) through several seek points. Observed `t0`/`t1` tracking exactly to the
 take's end (`contentT1`) rather than overshooting. Separately confirmed
 `followEnabled` flips to `false` after a wheel event and back to `true`
 after a double-click, matching the disable/re-enable design above.
+
+**Root-caused and fixed 2026-08-20: the default zoom itself, not a width
+floor.** A user report ("note bars for a longer score are really thin")
+was first patched with a `MIN_BAR_WIDTH` floor on the SVG rects - wrong
+fix, per the same user's follow-up: the actual bug was that
+`fitToContent` always squeezed the take's *entire* duration into view by
+default, so a long score's real per-note pixel-width rounds toward
+nothing regardless of any floor, and a floor just forces every note to
+the same fake width, destroying the duration information the user
+explicitly wanted preserved ("durations should be directly proportional
+to widths"). The width floor is real defensive code (`MIN_BAR_WIDTH = 1`,
+guards a literal 0px rect from float rounding), not what fixes
+readability.
+
+The actual fix, mirroring Desktop's GuitarHero (it never fits an entire
+multi-minute take into the plot at once - see §11a): `fitToContent`
+(`viewportState.svelte.js`) now defaults to a **fixed pixels-per-second
+density** (`DEFAULT_PX_PER_SEC = 30`) instead of the take's full span,
+clamped so a take shorter than the resulting window still shows in full
+(`Math.min(contentSpan, width / DEFAULT_PX_PER_SEC)`). A long take now
+gets a comfortable, genuinely-proportional default slice instead of
+being squeezed - the rest is reached via the pan/zoom/auto-follow already
+built (§11e above), all of which needed no changes since they already
+operate on an arbitrary current window, not specifically "the whole take."
+
+Density was tuned once by testing, not guessed once and shipped: 60px/sec
+was tried first and rejected - verified against `major.mxl` (8s, one of
+the existing short demo clips) that even that short take no longer fit by
+default at 800px container width (`minX/maxX` outside `[0, width]`),
+which is a bigger behavior change than intended (only long takes should
+need windowing). 30px/sec was verified to keep every current demo clip
+(8-18s) fully visible by default while still properly windowing
+`triunfal.mxl` (3:23) - 113 of 634 notes visible in the default window,
+widths 3.75-30px (vs. all 634 rendered as identical sub-pixel slivers
+before any of this).
+
+**Two more auto-follow issues found and fixed 2026-08-20, from a user
+report that follow "isn't working" in their own browser (both local dev
+and the deployed Amplify build), after a session of testing drag/zoom:**
+
+1. **Reactivity over-firing (efficiency, not correctness).** Re-verifying
+   follow with a temporary `window.__viewport` debug hook + a monkey-patched
+   `follow()` call counter (installed, used, removed - not shipped) found
+   it firing ~73x/sec during real playback against a 10Hz `currentTime`
+   poll. Cause: `follow()` reads `viewport.t0`/`t1` internally (to preserve
+   the current zoom span) - without guarding that read, it becomes a
+   tracked dependency of the *same* `$effect` that calls `follow()`, so the
+   effect's own write re-triggers itself. Each extra run was a stable
+   no-op once converged (not runaway drift), but still ~7x wasted reactive
+   work. Fixed by wrapping the call in Svelte's `untrack()`
+   (`NoteOverlay.svelte`), confirmed by re-measuring the steady-state
+   rate: exactly 10.0/sec after the fix.
+2. **The actual bug the user hit.** `handleBackgroundMouseDown`/
+   `handleWheel` call `viewport.disableFollow()` at the start of *any*
+   manual pan/zoom - correct in isolation (a drag shouldn't fight the next
+   currentTime tick), but the only way back was an undocumented
+   double-click, with zero visible indicator that follow had silently
+   turned off. A user who drags/zooms once while exploring the overlay -
+   exactly what testing pan/zoom naturally involves - loses auto-follow
+   for the rest of the session, which reads as "it doesn't work" rather
+   than "it's toggled off." Fixed in `playback.svelte.js`'s `play()`:
+   calls `viewport.enableFollow()` on every Play press, not just the
+   first, so pausing to look around and then resuming playback always
+   restores follow, regardless of pan/zoom in between. Reproduced the
+   exact reported sequence (drag -> `followEnabled` false -> press Play ->
+   `followEnabled` true, window immediately tracking real `currentTime`
+   again) and confirmed the fix closes it.
+
+**Known remaining gap, not yet addressed:** dragging/zooming *while
+already playing* (without pausing first) still suspends follow until the
+next Play press, since `enableFollow()` only fires from `play()`. Whether
+that should also auto-resume (e.g., a short time after the last manual
+interaction, even mid-playback) is a real UX tradeoff against fighting an
+active pan - deliberately left as-is pending user feedback on whether the
+Play-press fix above is sufficient.
+
+**A third, more serious bug found immediately after, from asking "does
+re-arming on Play also restart the actual playback position?" - it did,
+and this one predates all of today's viewport work entirely.**
+`play()` calls `reload()` unguarded (`if (lastLoadedKey == null) await
+reload();`) on the first Play press after a score loads. `reload()`
+(`playback.svelte.js:163`) only computes `resumeTicks` - the position to
+seek the freshly-rebuilt SMF player to - when `wasPlaying || resume` is
+true. On that first Play press, `isPlaying` is still `false` (it's only
+set `true` further down in `play()`, after `reload()` returns) and
+`resume` defaults to `false`, so if the user had seeked to a nonzero
+`currentTime` while paused (exactly what testing pan/zoom naturally
+involves), the seek was silently dropped: the SMF rebuilt fresh and
+playback started from tick 0, while `currentTime` itself (a separate
+piece of state, not read back from the synth) still displayed the old
+seeked value until the poll loop overwrote it a moment later - reading as
+"playback restarted" because the *audio* genuinely did, even though nothing
+about the pitch overlay was the cause.
+
+Reproduced precisely via temporary `window.__playback`/`window.__viewport`
+debug hooks (added, used, removed): `seek(60)` -> drag the overlay (view
+pans, `followEnabled` -> `false`, `currentTime` still `60`, confirming the
+drag itself never touches playback state) -> press Play -> `currentTime`
+observed at `~5` moments later (i.e., counting up from near 0, not from
+60). Fixed by passing `{ resume: true }` to that one `reload()` call in
+`play()` - harmless when `currentTime` is already 0 (`secondsToTicks(0,
+...)` is 0, so the resume-seek is skipped, identical to before for an
+ordinary from-the-start Play). Re-ran the identical repro post-fix:
+`currentTime` observed at `64.9` after the same sequence - correctly
+continuing from the seeked 60, not restarting.
+
+This bug is unrelated to the canvas/SVG split or viewport work (§11) - it
+lives entirely in `playback.svelte.js`'s pre-existing reload/resume logic
+- but calling `viewport.enableFollow()` from `play()` made it something a
+user would actually notice: re-arming follow on every Play press means
+Play now gets pressed (and this bug triggered) far more often during
+normal pan/zoom exploration than before.
+
+## 12. Pitch transpose (implemented 2026-08-21)
+
+Previously a disabled UI placeholder (`SettingsPanel.svelte`'s Transpose
+row shipped `disabled` from the start, with a comment admitting "nothing
+sends it yet"). Note there are two unrelated, confusingly similarly-named
+fields: `transpose_offset` (a TIME offset, already wired through
+`scoreTimeMap.js` for score-alignment, unrelated to this feature) and
+`transpose_semitones` (the actual PITCH shift, what this section is
+about).
+
+**Backend** (`web/api/analyze_api.py`): both `/notedata` and `/analyze`
+gained an optional `transpose_semitones: int | None = Form(None)` param.
+Applied via `score_data.transpose(dy=transpose_semitones)` immediately
+after `ScoreData.load()`/`_parse_uploaded_score()`, before
+`Recording`/`PitchDetector`/`MistakeDetector` ever see the score - so
+pitch detection, alignment, and mistake classification all run against
+the transposed score, mirroring desktop's `on_transpose_applied ->
+update_alignment_distances()` re-scoring. Always the TOTAL shift from the
+original score, not an incremental delta - unlike desktop's long-lived
+`ScoreData` (which accumulates `transpose_semitones` across repeated
+calls), this endpoint reloads the score fresh from the uploaded file
+every request, so there's no persisted state to apply a delta against.
+
+**Client-side cache** (`noteDataCache.js`): `getNoteData(scoreFile,
+apiBaseUrl, semitones = 0)` - the cache key became `` `${fileHash}:${semitones}` ``
+instead of just the file hash, so a transposed and untransposed request
+for the same file are independent cache entries, not a mutation of one.
+Switching transpose back to a previously-tried value (including 0) is an
+instant cache hit.
+
+**Session state** (`sessionState.svelte.js`): `transposeSemitones` (total
+from original, reset to 0 in `pickScore`) + `setTranspose(targetNoteName)`.
+UX mirrors desktop exactly: the user types a target note name (e.g. "D4"),
+not a raw semitone count. Computes the incremental nudge from
+`firstNoteMidiForActiveInstrument()` (the CURRENT first note - reflects
+any transpose already applied) to the target, adds it to the running
+total, re-fetches at that total, and - mirroring desktop's re-scoring
+behavior - automatically re-runs `/analyze` if a take already exists
+(`audioFile && analysisResult`), since otherwise the mistake table/pitch
+overlay would keep comparing user notes against the OLD score. A new
+`firstNoteName` getter drives `SettingsPanel.svelte`'s input syncing to
+the current first note whenever score/instrument/transpose changes,
+mirroring `SettingsWidget._sync_transpose_input`.
+
+**UI** (`SettingsPanel.svelte`): un-disabled, wired `applyTranspose()`
+following the exact same pattern as `applyRange`/`applyTuning`, added a
+`transposeError` display row matching the existing `rangeError` one.
+
+**Verified end-to-end** via temporary `window.__session` (plus
+`window.__viewport`/`window.__playback` from earlier work) debug hooks -
+added, used, removed, not shipped - against a real `/notedata` + `/analyze`
+round trip (`major.mxl` + `flute_scale_bad.m4a`):
+- Transpose input correctly synced to "C4" (the score's real first note)
+  on load.
+- Applying "D4" shifted `transposeSemitones` 0 -> 2 and note MIDI values
+  `[60,62,64] -> [62,64,66]` (exactly +2) - both in the pre-analysis
+  `/notedata` payload and, after clicking Analyze, in a real `/analyze`
+  result (8 pitch mistakes returned - a real classification, not an
+  error).
+- With that analysis already in hand, applying "C4" again correctly
+  auto-triggered a fresh `/analyze` call (`analysisResult` object
+  identity changed, mistake count changed 8 -> 7, matching the
+  now-different alignment) and reverted note MIDI back to the original
+  `[60,62,64]`.
+- Invalid input ("not-a-note") produced the expected parse error
+  (`transposeError` set, rendered in `.field-error`) without corrupting
+  `transposeSemitones` (stayed at 0).
+
+**Semantic verification (not just mechanical):** confirmed
+`transpose_semitones` genuinely changes what `/analyze`'s alignment
+considers correct, not just a display shift. Using `flute_scale_good.m4a`
+(a clean take, not the intentionally-flawed `_bad` one) against `major.mxl`:
+2 pitch mistakes at 0 semitones (matching key - a good take should score
+well). Transposing to D4 (+2 semitones, still the same recording) jumped
+that to 6 mistakes (mostly `substitution`, one `deletion`) - the singer/
+flute is still playing the C major scale, but the score now expects D
+major, and the analyzer correctly flags most notes as wrong. A
+cosmetic-only implementation (shifting only what's displayed, not what
+`Recording`/`MistakeDetector` actually compare against) would have shown 2
+mistakes either way.
+
+**Range fields sync too**, confirmed separately: `lowNoteName`/
+`highNoteName` went from `C4`-`C5` to `D4`-`D5` on the same +2 transpose -
+an exact +2 shift, matching Desktop's `_sync_range_after_transpose(delta)`.
+Implemented differently (a full recompute from the now-transposed note
+data via the existing `applyDefaultRangeForActiveInstrument()`, rather than
+sliding the two numbers by `delta` the way desktop does) but produces the
+same result - and arguably more robust, since a recompute can't drift from
+the note data the way repeated incremental shifts theoretically could.
+Tuning (440 Hz) correctly untouched, as expected - transpose has no
+tuning-reference implications.
+
+**Not done:** no automated test suite exists anywhere in this repo (no
+`pytest.ini`/`conftest.py`/`test_*.py` found on either platform) - adding
+one is a separate scope decision (test framework choice, CI wiring) from
+this feature, deliberately not made unilaterally. Verification here is
+live-browser/API-driven, same approach used throughout this session's
+other web work.
