@@ -429,7 +429,9 @@ function createSessionState() {
     try {
       noteData = await getNoteData(scoreFile, API_BASE_URL, nextTotal);
       transposeSemitones = nextTotal;
+      playback.loadNoteData(noteData);
       applyDefaultRangeForActiveInstrument();
+      notifyNoteDataLoaded(noteData);
       if (audioFile && analysisResult) {
         await runAnalyze();
       }
