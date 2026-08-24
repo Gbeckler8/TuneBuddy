@@ -65,7 +65,15 @@ export function buildSMF(channelsData, bpm, minDurationSeconds = 0) {
       events.push({ tick: 0, order: 0, bytes: [0xc0 | (channel & 0x0f), program & 0x7f] });
     }
     for (const note of notes) {
-      const startTick = secondsToTicks(note.startTime, bpm);
+      // Clamped to 0, not left negative: a MIDI file has no way to
+      // represent an event before tick 0, and an unclamped negative tick
+      // corrupts encodeVarLen's delta-time below (its `>>> 7` unsigned
+      // shift turns a negative delta into a huge positive one, producing a
+      // malformed variable-length quantity - surfaced as fluidsynth's
+      // "Invalid variable length number"). Reachable once real note times
+      // can go negative, e.g. stabilize_score_alignment's dx correction
+      // shifting the whole score backward past its own start.
+      const startTick = Math.max(0, secondsToTicks(note.startTime, bpm));
       const endTick = Math.max(startTick + 1, secondsToTicks(note.endTime, bpm));
       const velocity = Math.max(1, Math.min(127, Math.round(note.velocity ?? 90)));
       for (const midi of note.midiNum) {

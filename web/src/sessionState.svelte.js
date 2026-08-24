@@ -360,6 +360,19 @@ function createSessionState() {
       analyzeStatus = "idle";
       overridden = new Set();
       statusMessage = "Analysis complete.";
+      // stabilize_score_alignment() (run server-side during /analyze) may
+      // have refit the score's tempo/offset to the actual recording -
+      // rebuild playback from the corrected note_data/bpm (analysisResult's
+      // "score" + "timing_updated_note_data") rather than leaving it on the
+      // pre-analysis /notedata values, mirroring desktop's MidiPlayer, which
+      // reads score_data.midi_data as a live property and picks the
+      // stabilized timeline up automatically with no explicit reload.
+      playback.loadNoteData({
+        title: noteData?.title,
+        bpm: analysisResult.score?.bpm ?? noteData?.bpm,
+        metronome_channel: noteData?.metronome_channel,
+        note_data: analysisResult.timing_updated_note_data,
+      });
     } catch (err) {
       analyzeStatus = "error";
       analyzeError = err instanceof Error ? err.message : String(err);

@@ -36,11 +36,19 @@
   // perform.py does. Only this file's two call sites below need it today.
   let timeMap = new ScoreTimeMap();
 
+  // Prefers analysisResult's "score" once /analyze has run: stabilize_score_
+  // alignment() (server-side, during /analyze) may have refit the score's
+  // tempo/offset to the actual recording, and analysisResult.score.{bpm,
+  // bpm_og,transpose_offset} already reflects that (see JsonHandler.
+  // _score_to_payload) - falling back to the pre-analysis /notedata values
+  // means the cursor tracks the ORIGINAL tempo forever, same bug transpose
+  // had with playback before it read notifyNoteDataLoaded.
   function scoreInfo() {
+    const score = session.analysisResult?.score;
     return {
-      bpm: session.noteData?.bpm,
-      bpmOg: session.noteData?.bpm_og,
-      transposeOffset: session.noteData?.transpose_offset,
+      bpm: score?.bpm ?? session.noteData?.bpm,
+      bpmOg: score?.bpm_og ?? session.noteData?.bpm_og,
+      transposeOffset: score?.transpose_offset ?? session.noteData?.transpose_offset,
     };
   }
 
